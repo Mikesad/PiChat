@@ -8,7 +8,6 @@ import {
   activeGroupMembers,
   findGroup,
   groups,
-  idpSync,
   lastActiveLabels,
   readableDocumentsFor,
   roleLabels,
@@ -98,11 +97,11 @@ export function MembersPage() {
       <PageHeader
         eyebrow="Directory"
         title="成员与组"
-        description="查看成员角色、用户组与文档访问范围。成员和用户组由企业 IdP 同步，当前为只读。"
+        description="查看成员角色、用户组与文档访问范围。成员与用户组来自本地数据库，当前只读。"
         actions={
-          <Badge tone="success">
-            <Icon name="check-circle" size={12} />
-            已同步 · {idpSync.lastSyncedLabel}
+          <Badge tone="neutral">
+            <Icon name="lock" size={12} />
+            本地数据 · 只读
           </Badge>
         }
       />
@@ -111,14 +110,14 @@ export function MembersPage() {
         items={[
           { label: "成员总数", value: users.length, hint: "含停用账号" },
           { label: "活跃成员", value: activeUsers, hint: "参与权限计算" },
-          { label: "用户组", value: groups.length, hint: "IdP 同步" },
-          { label: "同步来源", value: idpSync.provider, hint: idpSync.cadence },
+          { label: "用户组", value: groups.length, hint: "本地数据库" },
+          { label: "数据来源", value: "本地 MySQL", hint: "当前只读" },
         ]}
       />
 
-      <InfoBanner tone="neutral" icon="refresh" title="IdP 只读同步">
-        成员、用户组与角色来自企业 IdP。当前阶段 PiChat 只读展示；角色变更入口需要等待成员同步 API
-        接入，变更会写入审计日志。
+      <InfoBanner tone="neutral" icon="database" title="本地数据库成员，当前只读">
+        成员、用户组与角色来自本地数据库种子数据。成员/组查询 API
+        与角色编辑将在后续冲刺接入；此页的可读文档数为本地预览，不是服务端判定。
       </InfoBanner>
 
       <Tabs
@@ -215,7 +214,7 @@ export function MembersPage() {
                       <span>
                         共 {filteredUsers.length} 名成员 · 活跃 {activeUsers} 名
                       </span>
-                      <span>成员由 IdP 同步</span>
+                      <span>成员来自本地数据库</span>
                     </>
                   }
                 >
@@ -225,7 +224,7 @@ export function MembersPage() {
                       <th className={thClass}>角色</th>
                       <th className={thClass}>用户组</th>
                       <th className={thClass}>状态</th>
-                      <th className={thClass}>可读文档</th>
+                      <th className={thClass}>可读文档（本地预览）</th>
                       <th className={thClass}>最近活跃</th>
                       <th className={thClass}>
                         <span className="sr-only">操作</span>
@@ -293,19 +292,17 @@ export function MembersPage() {
                   footer={
                     <>
                       <span>共 {filteredGroups.length} 个用户组</span>
-                      <span>
-                        {idpSync.provider} · {idpSync.lastSyncedLabel}
-                      </span>
+                      <span>本地数据库 · 只读</span>
                     </>
                   }
                 >
                   <thead>
                     <tr>
                       <th className={thClass}>用户组</th>
-                      <th className={thClass}>外部 ID</th>
+                      <th className={thClass}>外部 ID（历史字段）</th>
                       <th className={thClass}>成员</th>
                       <th className={thClass}>成员预览</th>
-                      <th className={thClass}>同步</th>
+                      <th className={thClass}>来源</th>
                       <th className={thClass}>
                         <span className="sr-only">操作</span>
                       </th>
@@ -406,7 +403,7 @@ function MemberRow({
         <p className="text-sm tabular-nums text-fg">
           {readable} / {totalDocs}
         </p>
-        <p className="mt-0.5 text-[11px] text-subtle">按当前 ACL 计算</p>
+        <p className="mt-0.5 text-[11px] text-subtle">本地预览，非服务端判定</p>
       </td>
       <td className={tdClass}>
         <p className="text-xs text-muted">{lastActiveLabels[user.id] ?? "—"}</p>
@@ -460,7 +457,7 @@ function MemberCard({
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
         <span className="text-fg">
-          可读 {readable} / {totalDocs} 篇
+          可读 {readable} / {totalDocs} 篇（本地预览）
         </span>
         <span>最近活跃 {lastActiveLabels[user.id] ?? "—"}</span>
       </div>
@@ -505,9 +502,9 @@ function GroupRow({ group, onOpen }: { group: AdminGroup; onOpen: () => void }) 
         )}
       </td>
       <td className={tdClass}>
-        <Badge tone="success">
-          <Icon name="check-circle" size={10} />
-          已同步
+        <Badge tone="neutral">
+          <Icon name="database" size={10} />
+          本地
         </Badge>
       </td>
       <td className={`${tdClass} text-right`}>
@@ -531,7 +528,7 @@ function GroupCard({ group, onOpen }: { group: AdminGroup; onOpen: () => void })
           <p className="truncate text-sm font-medium text-fg">{group.name}</p>
           <p className="mt-0.5 truncate font-mono text-[11px] text-subtle">{group.externalId}</p>
         </div>
-        <Badge tone="success">已同步</Badge>
+        <Badge tone="neutral">本地</Badge>
       </div>
       <p className="mt-2.5 text-[11px] text-subtle">
         {members.length} 人 ·{" "}
@@ -572,7 +569,7 @@ function MemberDrawer({
       open
       onClose={onClose}
       title={user.name}
-      description={`${user.email} · ${idpSync.provider}`}
+      description={`${user.email} · 本地数据库`}
       footer={
         <div className="flex justify-end">
           <Button variant="secondary" onClick={onClose}>
@@ -597,7 +594,7 @@ function MemberDrawer({
 
       <section className="mt-4">
         <h3 className="text-xs font-medium text-fg">用户组</h3>
-        <p className="mt-1 text-[11px] text-subtle">用户组来自 IdP，不能在这里增删。</p>
+        <p className="mt-1 text-[11px] text-subtle">用户组来自本地数据库，当前只读。</p>
         {memberGroups.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-subtle">
             未加入任何用户组。
@@ -627,7 +624,8 @@ function MemberDrawer({
             可读 {readable} / {totalDocs} 篇文档
           </p>
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            按知识库默认范围与文档例外实时计算。租户管理员始终可读全部文档，不计入可见人数。
+            本地预览：基于当前页面可见文档与种子成员快照计算，不是服务端按成员判定。成员 API
+            接入后替换。
           </p>
           <div className="mt-2">
             <LinkButton href="/permissions" size="sm">
@@ -639,18 +637,18 @@ function MemberDrawer({
       </section>
 
       <section className="mt-4">
-        <h3 className="text-xs font-medium text-fg">同步信息</h3>
+        <h3 className="text-xs font-medium text-fg">数据来源</h3>
         <dl className="mt-2 grid gap-2 text-xs">
           <div className="flex items-center justify-between gap-2">
             <dt className="text-subtle">来源</dt>
-            <dd className="text-fg">{idpSync.provider}</dd>
+            <dd className="text-fg">本地 MySQL</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">最近同步</dt>
-            <dd className="text-fg">{idpSync.lastSyncedLabel}</dd>
+            <dt className="text-subtle">成员 API</dt>
+            <dd className="text-fg">下一冲刺接入</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">最近活跃</dt>
+            <dt className="text-subtle">最近活跃（示例）</dt>
             <dd className="text-fg">{lastActiveLabels[user.id] ?? "—"}</dd>
           </div>
         </dl>
@@ -658,7 +656,7 @@ function MemberDrawer({
 
       <div className="mt-4">
         <InfoBanner tone="neutral" icon="lock" title="只读">
-          成员、用户组与角色由 IdP 同步；角色变更入口将在成员同步 API 接入后开放。
+          成员、用户组与角色来自本地数据库，当前只读；角色编辑与密码重置将在后续开放。
         </InfoBanner>
       </div>
     </Drawer>
@@ -672,7 +670,7 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
       open
       onClose={onClose}
       title={group.name}
-      description={`${group.externalId} · ${idpSync.provider}`}
+      description={`${group.externalId} · 本地数据库`}
       footer={
         <div className="flex justify-end">
           <Button variant="secondary" onClick={onClose}>
@@ -684,7 +682,7 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
       <div className="rounded-xl border border-border bg-surface-2/60 p-4">
         <p className="text-sm font-medium text-fg">{members.length} 名活跃成员</p>
         <p className="mt-1 text-[11px] leading-5 text-subtle">
-          用户组来自 IdP 同步。文档权限在“文档权限”中按文档配置，用户组本身不直接授予访问。
+          用户组来自本地数据库。文档权限在“文档权限”中按文档配置，用户组本身不直接授予访问。
         </p>
         <div className="mt-2">
           <LinkButton href="/permissions" size="sm">
@@ -720,15 +718,15 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
       </section>
 
       <section className="mt-4">
-        <h3 className="text-xs font-medium text-fg">同步信息</h3>
+        <h3 className="text-xs font-medium text-fg">数据来源</h3>
         <dl className="mt-2 grid gap-2 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">外部 ID</dt>
+            <dt className="text-subtle">外部 ID（历史字段）</dt>
             <dd className="font-mono text-fg">{group.externalId}</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">最近同步</dt>
-            <dd className="text-fg">{idpSync.lastSyncedLabel}</dd>
+            <dt className="text-subtle">来源</dt>
+            <dd className="text-fg">本地 MySQL · 只读</dd>
           </div>
         </dl>
       </section>

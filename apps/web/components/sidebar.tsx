@@ -350,7 +350,7 @@ const adminNav = [
     id: "members",
     href: "/members",
     label: "成员与组",
-    description: "IdP 同步与角色",
+    description: "本地成员与角色",
     icon: "users",
   },
   {
@@ -422,7 +422,7 @@ function ManageNav({
           <Icon name="users" size={12} />
           成员来源
         </p>
-        <p className="mt-1">成员与用户组由企业 IdP 只读同步；权限变更会写入审计日志。</p>
+        <p className="mt-1">成员与用户组来自本地数据库，当前只读；权限变更由服务端写入审计。</p>
       </div>
     </div>
   );

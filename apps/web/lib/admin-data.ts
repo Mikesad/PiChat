@@ -34,12 +34,15 @@ export interface AdminDocument {
   knowledgeBaseId: string;
   title: string;
   status: DocumentStatus;
-  sizeLabel: string;
+  sizeLabel: string | null;
   updatedAt: string;
   updatedLabel: string;
+  createdAt: string;
   sourceKey: string;
-  ragflowDocumentId?: string;
+  ragflowDocumentId?: string | null;
   exceptions: AclException[];
+  effectiveReaderCount: number;
+  canManageAcl: boolean;
 }
 
 export interface AdminKnowledgeBase {
@@ -48,10 +51,14 @@ export interface AdminKnowledgeBase {
   description: string;
   embeddingModel: string;
   ragflowDatasetId: string;
+  aclVersion: number;
   createdAt: string;
   updatedAt: string;
   updatedLabel: string;
   defaultSubjects: AclSubject[];
+  documentCount: number;
+  readableDocumentCount: number;
+  canManageAcl: boolean;
   documents: AdminDocument[];
 }
 
@@ -198,16 +205,50 @@ export const statusMeta: Record<
   deleted: { label: "已删除", tone: "neutral" },
 };
 
+export function formatUpdatedLabel(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((todayStart - dateStart) / 86_400_000);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+  if (dayDiff === 0) {
+    return `今天 ${time}`;
+  }
+  if (dayDiff === 1) {
+    return `昨天 ${time}`;
+  }
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}
+
 function doc(
   knowledgeBaseId: string,
-  input: Omit<AdminDocument, "knowledgeBaseId" | "exceptions"> & {
+  input: Omit<
+    AdminDocument,
+    "knowledgeBaseId" | "exceptions" | "createdAt" | "effectiveReaderCount" | "canManageAcl"
+  > & {
     exceptions?: AclException[];
+    createdAt?: string;
+    effectiveReaderCount?: number;
+    canManageAcl?: boolean;
   },
 ): AdminDocument {
   return {
     knowledgeBaseId,
-    exceptions: [],
     ...input,
+    exceptions: input.exceptions ?? [],
+    createdAt: input.createdAt ?? input.updatedAt,
+    effectiveReaderCount: input.effectiveReaderCount ?? 0,
+    canManageAcl: input.canManageAcl ?? true,
   };
 }
 
@@ -218,6 +259,10 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "公司级制度、流程与合规文件，默认全员可读。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_policy_2026",
+    aclVersion: 1,
+    documentCount: 5,
+    readableDocumentCount: 4,
+    canManageAcl: true,
     createdAt: "2026-08-12T09:00:00+08:00",
     updatedAt: "2026-10-20T10:24:00+08:00",
     updatedLabel: "今天 10:24",
@@ -287,6 +332,10 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "对外产品资料与内部版本说明，默认产品组可读。",
     embeddingModel: "text-embedding-3-large · 3072 维",
     ragflowDatasetId: "ragflow_product_v3",
+    aclVersion: 1,
+    documentCount: 5,
+    readableDocumentCount: 4,
+    canManageAcl: true,
     createdAt: "2026-07-03T14:30:00+08:00",
     updatedAt: "2026-10-20T09:05:00+08:00",
     updatedLabel: "今天 09:05",
@@ -351,6 +400,10 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "客服与售后团队的处理规范、话术与常见问题。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_support_2026",
+    aclVersion: 1,
+    documentCount: 5,
+    readableDocumentCount: 5,
+    canManageAcl: true,
     createdAt: "2026-06-18T10:00:00+08:00",
     updatedAt: "2026-10-19T17:42:00+08:00",
     updatedLabel: "昨天 17:42",
@@ -416,6 +469,10 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "仅在明确授权后可读，默认不对普通成员开放。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_board_2026",
+    aclVersion: 1,
+    documentCount: 1,
+    readableDocumentCount: 1,
+    canManageAcl: true,
     createdAt: "2026-09-01T09:00:00+08:00",
     updatedAt: "2026-09-30T18:00:00+08:00",
     updatedLabel: "9月30日",
@@ -748,13 +805,6 @@ export const auditResultLabels: Record<AuditResult, string> = {
   success: "成功",
   denied: "拒绝",
   failed: "失败",
-};
-
-export const idpSync = {
-  provider: "Okta SCIM",
-  lastSyncedLabel: "今天 08:30",
-  cadence: "每小时同步",
-  status: "ok" as const,
 };
 
 export const lastActiveLabels: Record<string, string> = {

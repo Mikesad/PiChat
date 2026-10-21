@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
+import { roleLabels } from "@/lib/admin-data";
 import { ConfirmDialog } from "./admin/confirm-dialog";
 import { useToast } from "./admin/toast";
 import { useAuth } from "./auth/auth-provider";
@@ -20,9 +21,9 @@ export function UserMenu() {
   const firstItemRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
 
-  const name = user?.name ?? "张明";
-  const role = user?.role === "tenant_admin" ? "租户管理员" : "成员";
-  const canConfigure = (user?.role ?? "tenant_admin") === "tenant_admin";
+  const name = user?.displayName ?? "未登录";
+  const role = user ? roleLabels[user.role] : "—";
+  const canConfigure = user?.role === "tenant_admin";
 
   useEffect(() => {
     if (!open) {
@@ -62,9 +63,9 @@ export function UserMenu() {
     setLogoutOpen(true);
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     clearToasts();
-    logout();
+    await logout();
     setLogoutOpen(false);
     router.replace("/login");
   }

@@ -4,9 +4,8 @@ import { useState } from "react";
 import { type AclSubject, subjectKey, subjectName } from "@/lib/admin-data";
 import { Icon } from "../icons";
 import { SubjectSelect } from "./acl";
-import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
-import { useToast } from "./toast";
+import { useNotImplemented } from "./not-implemented";
 import { Button, FormField, InfoBanner, inputClass, selectClass, textareaClass } from "./ui";
 
 const embeddingOptions = [
@@ -15,15 +14,8 @@ const embeddingOptions = [
   "qwen3-embedding-0.6b · 1024 维",
 ];
 
-export function CreateKnowledgeDrawer({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: (knowledgeBaseId: string) => void;
-}) {
-  const { addKnowledgeBase } = useAdminData();
-  const { showToast } = useToast();
+export function CreateKnowledgeDrawer({ onClose }: { onClose: () => void }) {
+  const notifyNotImplemented = useNotImplemented();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [embeddingModel, setEmbeddingModel] = useState(embeddingOptions[0] ?? "");
@@ -69,16 +61,7 @@ export function CreateKnowledgeDrawer({
       return;
     }
 
-    const knowledgeBase = addKnowledgeBase({
-      name,
-      description,
-      embeddingModel,
-      ragflowDatasetId: dataset,
-      defaultSubjects,
-    });
-    showToast("知识库已创建");
-    onCreated(knowledgeBase.id);
-    onClose();
+    notifyNotImplemented("新建知识库");
   }
 
   return (

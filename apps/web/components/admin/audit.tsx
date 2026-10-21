@@ -94,11 +94,11 @@ export function AuditPage() {
       <PageHeader
         eyebrow="Audit"
         title="审计日志"
-        description="记录权限、知识库与文档管理的变更。事件流当前由管理端 mock 操作生成，跨页面可见。"
+        description="记录权限、知识库与文档管理的变更。当前展示静态示例数据，审计查询 API 将在下一冲刺接入。"
         actions={
           <Badge tone="outline">
             <Icon name="lock" size={11} />
-            只读
+            只读示例
           </Badge>
         }
       />
@@ -117,9 +117,9 @@ export function AuditPage() {
         ]}
       />
 
-      <InfoBanner tone="neutral" icon="clipboard" title="只读审计流">
-        当前事件由管理端 mock 操作生成，用于验证交互链路；接入 API
-        后将由服务端写入并支持不可篡改存储。
+      <InfoBanner tone="neutral" icon="clipboard" title="静态示例审计流">
+        当前事件为静态示例，不代表本轮 ACL 操作已被记录。服务端已在本轮写入 audit_logs；审计查询 API
+        与审计页接真将在下一冲刺完成。
       </InfoBanner>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -389,8 +389,8 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
       </section>
 
       <div className="mt-4">
-        <InfoBanner tone="neutral" icon="lock" title="只读">
-          审计事件不可在这里修改。接入服务端后由追加写入存储，并支持按时间与资源检索。
+        <InfoBanner tone="neutral" icon="lock" title="只读示例">
+          审计事件不可在这里修改。服务端已写入 audit_logs；查询 API 与页面接真将在下一冲刺完成。
         </InfoBanner>
       </div>
     </Drawer>
