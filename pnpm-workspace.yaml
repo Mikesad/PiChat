@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+onlyBuiltDependencies:
+  - "@biomejs/biome"
+  - "@silvia-odwyer/photon-node"
+  - esbuild
+  - msgpackr-extract
+  - sharp

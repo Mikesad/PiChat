@@ -1,0 +1,30 @@
+{
+  "name": "pichat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Enterprise knowledge base agent powered by Pi SDK and RAGFlow",
+  "packageManager": "pnpm@10.8.0",
+  "engines": {
+    "node": ">=22.22.3",
+    "pnpm": ">=10.8.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "db:generate": "pnpm --filter @pichat/db db:generate",
+    "db:push": "pnpm --filter @pichat/db db:push",
+    "db:studio": "pnpm --filter @pichat/db db:studio"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@types/node": "^22.20.5",
+    "tsup": "^9.0.0",
+    "turbo": "^2.11.9",
+    "typescript": "^5.9.3"
+  }
+}
