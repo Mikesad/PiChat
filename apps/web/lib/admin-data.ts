@@ -181,6 +181,7 @@ export const users: AdminUser[] = [
 
 export const groups: AdminGroup[] = [
   { id: "g-all", name: "全员", externalId: "idp-all-staff" },
+  { id: "g-platform", name: "平台组", externalId: "idp-platform" },
   { id: "g-product", name: "产品组", externalId: "idp-product" },
   { id: "g-support", name: "售后组", externalId: "idp-support" },
   { id: "g-finance", name: "财务组", externalId: "idp-finance" },
