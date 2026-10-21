@@ -85,7 +85,7 @@ Remove-Item Env:NODE_OPTIONS
 - 审计：验证期间写入 4 条 `audit_logs`（2 条 `document.acl.update`、2 条
   `knowledge_base.acl.update`），metadata 包含 actor、before/after、result、aclVersion。
 - 数据库密码列：非 `scrypt$` 开头的 hash 数量为 0；session token_hash 长度 64。
-- API 日志未出现 `123456`、`pichat_session=`、`scrypt$` 或 `password` 字符串。
+- API 日志未出现演示密码、`pichat_session=`、`scrypt$` 或 `password` 字符串。
 
 ## 4. 契约/数据冲突，需要用户确认
 
@@ -97,8 +97,8 @@ Remove-Item Env:NODE_OPTIONS
    字段为 `userId`；契约第 2 节要求 `id`。已按契约改为
    `{id, tenantId, email, displayName, role, groupIds}`。任务 B 应使用 `user.id`，
    不要再读 `user.userId`。
-3. **演示密码**：`docs/当前进度.md` 早期写的 `Pichat@2026` 与冻结契约的 `123456` 冲突；
-   本任务按契约使用 `123456`（见 `docs/api-contract.md`），数据库只存 scrypt hash。
+3. **演示密码**：`docs/当前进度.md` 早期写的密码与冻结契约冲突；本任务按
+   `docs/api-contract.md` 的演示密码执行，数据库只存 scrypt hash。
 4. **`pnpm check`**：仓库基线文件以 CRLF 提交，而 Biome 默认要求 LF，未改动的全仓文件会让
    `pnpm check` 报格式错误。为保证 `pnpm lint` 通过，仅在工作区把 `apps/web` 等文件的
    换行规范为 LF；`git diff` 无内容变化，未修改任何 Web 业务代码。建议后续单独决定是否加
