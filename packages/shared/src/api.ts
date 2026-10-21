@@ -1,4 +1,4 @@
-import type { DocumentStatus, Principal } from "./domain.js";
+import type { DocumentStatus, UserRole } from "./domain.js";
 
 export const sessionCookieName = "pichat_session";
 export const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -16,9 +16,13 @@ export interface AclException extends AclSubject {
   permission: AclPermission;
 }
 
-export interface SessionUser extends Principal {
+export interface SessionUser {
+  id: string;
+  tenantId: string;
   email: string;
   displayName: string;
+  role: UserRole;
+  groupIds: string[];
 }
 
 export interface LoginRequest {

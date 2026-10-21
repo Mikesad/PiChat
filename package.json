@@ -18,6 +18,7 @@
     "check": "biome check .",
     "db:generate": "pnpm --filter @pichat/db db:generate",
     "db:push": "pnpm --filter @pichat/db db:push",
+    "db:seed": "pnpm --filter @pichat/db db:seed",
     "db:studio": "pnpm --filter @pichat/db db:studio"
   },
   "devDependencies": {

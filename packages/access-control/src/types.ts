@@ -3,11 +3,25 @@ export type SubjectType = "user" | "group";
 export type AclPermission = "read" | "deny";
 
 export interface AclEntry {
+  tenantId?: string;
   documentId: string;
   knowledgeBaseId: string;
   subjectType: SubjectType;
   subjectId: string;
   permission: AclPermission;
+}
+
+export interface KnowledgeBaseAclEntry {
+  tenantId?: string;
+  knowledgeBaseId: string;
+  subjectType: SubjectType;
+  subjectId: string;
+  permission: AclPermission;
+}
+
+export interface DocumentRef {
+  id: string;
+  knowledgeBaseId: string;
 }
 
 export interface AccessPrincipal {

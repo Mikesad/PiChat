@@ -1,5 +1,11 @@
-import "dotenv/config";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
+
+const envDir = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(envDir, "../../.env"), quiet: true });
+config({ quiet: true });
 
 export default defineConfig({
   schema: "./src/schema.ts",
