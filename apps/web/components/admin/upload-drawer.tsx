@@ -3,8 +3,7 @@
 import { type ChangeEvent, type DragEvent, useRef, useState } from "react";
 import { type AdminKnowledgeBase, defaultAccessLabel } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
-import { Icon, Spinner } from "../icons";
-import { useAdminData } from "./admin-data";
+import { Icon } from "../icons";
 import { Drawer } from "./drawer";
 import { useToast } from "./toast";
 import { Button, InfoBanner, SubjectChip } from "./ui";
@@ -39,12 +38,10 @@ export function UploadDrawer({
   knowledgeBase: AdminKnowledgeBase;
   onClose: () => void;
 }) {
-  const { addDocuments } = useAdminData();
   const { showToast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<SelectedFile[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const duplicates = new Set(
@@ -99,9 +96,6 @@ export function UploadDrawer({
   }
 
   function requestClose() {
-    if (uploading) {
-      return;
-    }
     onClose();
   }
 
@@ -110,15 +104,7 @@ export function UploadDrawer({
       setError("请先选择文件");
       return;
     }
-    setUploading(true);
-    window.setTimeout(() => {
-      addDocuments(
-        knowledgeBase.id,
-        files.map((file) => ({ title: file.name, sizeLabel: file.sizeLabel })),
-      );
-      showToast(`已加入解析队列，共 ${files.length} 篇文档`);
-      onClose();
-    }, 700);
+    showToast("上传文档：本冲刺未接入", "neutral");
   }
 
   return (
@@ -131,17 +117,23 @@ export function UploadDrawer({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-subtle">已选 {files.length} 个文件</p>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={requestClose} disabled={uploading}>
+            <Button variant="secondary" onClick={requestClose}>
               取消
             </Button>
-            <Button onClick={handleUpload} disabled={files.length === 0 || uploading}>
-              {uploading ? <Spinner className="size-3.5" /> : <Icon name="upload" size={14} />}
-              {uploading ? "上传中…" : "开始上传"}
+            <Button onClick={handleUpload} disabled={files.length === 0}>
+              <Icon name="upload" size={14} />
+              开始上传
             </Button>
           </div>
         </div>
       }
     >
+      <div className="mb-4">
+        <InfoBanner tone="warning" icon="alert-circle" title="本冲刺未接入上传">
+          文档上传、解析轮询与 RAGFlow 入库将在后续冲刺接入。当前选择文件不会写入服务端。
+        </InfoBanner>
+      </div>
+
       <input
         ref={inputRef}
         type="file"

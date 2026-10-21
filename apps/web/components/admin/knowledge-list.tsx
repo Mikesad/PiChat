@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { defaultAccessLabel, documentStats } from "@/lib/admin-data";
-import { Icon } from "../icons";
+import { useAuth } from "../auth/auth-provider";
+import { Icon, Spinner } from "../icons";
 import { useAdminData } from "./admin-data";
-import { CreateKnowledgeDrawer } from "./create-knowledge-drawer";
+import { useNotImplemented } from "./not-implemented";
 import {
   Badge,
   Button,
@@ -24,10 +24,11 @@ import {
 } from "./ui";
 
 export function KnowledgeListPage() {
-  const { knowledgeBases } = useAdminData();
-  const router = useRouter();
+  const { knowledgeBases, status, error, reload } = useAdminData();
+  const { user } = useAuth();
+  const notifyNotImplemented = useNotImplemented();
   const [query, setQuery] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
+  const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -54,19 +55,72 @@ export function KnowledgeListPage() {
     return { documents, ready, failed };
   }, [knowledgeBases]);
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Knowledge"
-        title="知识库"
-        description="管理文档解析、检索范围与默认访问权限。权限变更会在下一次提问时生效。"
-        actions={
-          <Button onClick={() => setCreateOpen(true)}>
+  const header = (
+    <PageHeader
+      eyebrow="Knowledge"
+      title="知识库"
+      description="管理文档解析、检索范围与默认访问权限。权限变更会在下一次提问时生效。"
+      actions={
+        canManage ? (
+          <Button onClick={() => notifyNotImplemented("新建知识库")}>
             <Icon name="plus" size={15} />
             新建知识库
           </Button>
-        }
-      />
+        ) : undefined
+      }
+    />
+  );
+
+  if (knowledgeBases.length === 0 && status === "loading") {
+    return (
+      <div className="space-y-6">
+        {header}
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-surface px-6 py-16 text-center">
+          <Spinner className="text-accent" />
+          <p className="text-sm text-muted">正在加载知识库…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (knowledgeBases.length === 0 && status === "error") {
+    return (
+      <div className="space-y-6">
+        {header}
+        <InfoBanner
+          tone="danger"
+          icon="alert-circle"
+          title="知识库加载失败"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => void reload()}>
+              重试
+            </Button>
+          }
+        >
+          {error ?? "请稍后重试。"}
+        </InfoBanner>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {header}
+
+      {status === "error" ? (
+        <InfoBanner
+          tone="danger"
+          icon="alert-circle"
+          title="刷新失败，当前显示上次加载的数据"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => void reload()}>
+              重试
+            </Button>
+          }
+        >
+          {error ?? "请稍后重试。"}
+        </InfoBanner>
+      ) : null}
 
       <StatStrip
         items={[
@@ -103,13 +157,19 @@ export function KnowledgeListPage() {
           {knowledgeBases.length === 0 ? (
             <EmptyState
               icon="book-open"
-              title="还没有知识库"
-              description="创建第一个知识库，绑定 RAGFlow 数据集后即可上传文档。"
+              title="当前账号没有可见的知识库"
+              description={
+                canManage
+                  ? "知识库创建接口将在后续冲刺接入；本轮请使用种子数据。"
+                  : "请联系管理员为你的账号或用户组授予读取权限。"
+              }
               action={
-                <Button onClick={() => setCreateOpen(true)}>
-                  <Icon name="plus" size={15} />
-                  新建知识库
-                </Button>
+                canManage ? (
+                  <Button onClick={() => notifyNotImplemented("新建知识库")}>
+                    <Icon name="plus" size={15} />
+                    新建知识库
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -187,6 +247,9 @@ export function KnowledgeListPage() {
                           {stats.failed > 0 ? (
                             <span className="text-danger">{stats.failed} 失败</span>
                           ) : null}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-subtle">
+                          当前可读 {knowledgeBase.readableDocumentCount} 篇
                         </p>
                       </td>
                       <td className={tdClass}>
@@ -290,13 +353,6 @@ export function KnowledgeListPage() {
           </ul>
         </>
       )}
-
-      {createOpen ? (
-        <CreateKnowledgeDrawer
-          onClose={() => setCreateOpen(false)}
-          onCreated={(knowledgeBaseId) => router.push(`/knowledge/${knowledgeBaseId}`)}
-        />
-      ) : null}
     </div>
   );
 }

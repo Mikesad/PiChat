@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { type FormEvent, useRef, useState } from "react";
+import { ApiError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { Icon, LogoMark, Spinner } from "../icons";
 import { ThemeToggle } from "../theme-toggle";
@@ -12,6 +13,19 @@ interface LoginErrors {
   password?: string;
   form?: string;
 }
+
+const seedAccounts = [
+  {
+    name: "张明",
+    role: "租户管理员",
+    email: "zhang.ming@example.com",
+  },
+  {
+    name: "王芳",
+    role: "成员",
+    email: "wang.fang@example.com",
+  },
+];
 
 const highlights = [
   {
@@ -31,6 +45,28 @@ const highlights = [
   },
 ];
 
+function loginErrorFor(error: unknown): LoginErrors {
+  if (error instanceof ApiError) {
+    if (error.code === "user_not_found") {
+      return {
+        email: "该邮箱尚未开通账号。",
+        form: "邮箱不存在，请使用下方演示账号或联系管理员。",
+      };
+    }
+    if (error.code === "invalid_password") {
+      return { password: "密码错误。", form: "密码不正确，请重新输入。" };
+    }
+    if (error.code === "account_disabled") {
+      return { form: "账号已停用，请联系管理员。" };
+    }
+    if (error.code === "invalid_request") {
+      return { form: "请输入有效的邮箱和密码。" };
+    }
+    return { form: error.message };
+  }
+  return { form: "无法连接登录服务，请确认 API 已启动后重试。" };
+}
+
 export function LoginForm() {
   const router = useRouter();
   const { login } = useAuth();
@@ -42,7 +78,7 @@ export function LoginForm() {
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) {
       return;
@@ -50,7 +86,7 @@ export function LoginForm() {
 
     const nextErrors: LoginErrors = {};
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      nextErrors.email = "请输入有效的企业邮箱";
+      nextErrors.email = "请输入有效的邮箱";
     }
     if (password.trim().length === 0) {
       nextErrors.password = "请输入密码";
@@ -71,10 +107,27 @@ export function LoginForm() {
 
     setErrors({});
     setSubmitting(true);
-    window.setTimeout(() => {
-      login(email);
+    try {
+      await login(email, password);
       router.replace("/");
-    }, 650);
+    } catch (error) {
+      const next = loginErrorFor(error);
+      setErrors(next);
+      if (next.email) {
+        emailRef.current?.focus();
+      } else if (next.password) {
+        passwordRef.current?.focus();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function fillAccount(accountEmail: string) {
+    setEmail(accountEmail);
+    setPassword("123456");
+    setErrors({});
+    passwordRef.current?.focus();
   }
 
   return (
@@ -154,7 +207,7 @@ export function LoginForm() {
               </p>
               <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">登录 PiChat</h1>
               <p className="mt-1.5 text-sm leading-6 text-muted">
-                使用企业账号进入知识库 Agent。回答只检索你有权访问的文档。
+                使用本地账号进入知识库 Agent。回答只检索你有权访问的文档。
               </p>
 
               {errors.form ? (
@@ -170,7 +223,7 @@ export function LoginForm() {
               <form onSubmit={handleSubmit} className="mt-5 space-y-4" noValidate>
                 <div>
                   <label htmlFor="login-email" className="text-xs font-medium text-fg">
-                    企业邮箱
+                    邮箱
                   </label>
                   <input
                     ref={emailRef}
@@ -182,7 +235,7 @@ export function LoginForm() {
                       setErrors((previous) => ({ ...previous, email: undefined, form: undefined }));
                     }}
                     autoComplete="email"
-                    placeholder="name@company.com"
+                    placeholder="name@example.com"
                     aria-invalid={errors.email ? true : undefined}
                     aria-describedby={errors.email ? "login-email-error" : undefined}
                     className={cn(
@@ -198,12 +251,9 @@ export function LoginForm() {
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <label htmlFor="login-password" className="text-xs font-medium text-fg">
-                      密码
-                    </label>
-                    <span className="text-[11px] text-subtle">演示环境不校验密码</span>
-                  </div>
+                  <label htmlFor="login-password" className="text-xs font-medium text-fg">
+                    密码
+                  </label>
                   <div className="relative mt-1.5">
                     <input
                       ref={passwordRef}
@@ -219,7 +269,7 @@ export function LoginForm() {
                         }));
                       }}
                       autoComplete="current-password"
-                      placeholder="输入任意密码"
+                      placeholder="输入密码"
                       aria-invalid={errors.password ? true : undefined}
                       aria-describedby={errors.password ? "login-password-error" : undefined}
                       className={cn(
@@ -253,32 +303,28 @@ export function LoginForm() {
                   {submitting ? "正在登录…" : "登录"}
                 </button>
               </form>
-
-              <div className="my-4 flex items-center gap-3">
-                <span className="h-px flex-1 bg-border" />
-                <span className="text-[11px] text-subtle">或</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
-              <button
-                type="button"
-                disabled
-                title="企业 SSO 尚未接入"
-                className="flex h-11 w-full cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-border bg-surface text-sm font-medium text-muted opacity-60"
-              >
-                使用企业 SSO 登录
-                <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-subtle">
-                  即将开放
-                </span>
-              </button>
             </div>
 
             <div className="mt-4 rounded-xl border border-dashed border-border bg-surface-2/60 px-3.5 py-3 text-[11px] leading-5 text-subtle">
-              <p className="font-medium text-muted">演示环境</p>
-              <p className="mt-1">
-                任意有效邮箱 + 任意密码即可登录，将以租户管理员身份进入。真实登录需要接入 OIDC /
-                Keycloak。
-              </p>
+              <p className="font-medium text-muted">演示账号</p>
+              <p className="mt-1">本地数据库账号，密码统一为 123456。选择账号可自动填入。</p>
+              <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                {seedAccounts.map((account) => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    onClick={() => fillAccount(account.email)}
+                    className="cursor-pointer rounded-lg border border-border bg-surface px-2.5 py-2 text-left transition-colors hover:border-accent hover:bg-surface-2"
+                  >
+                    <span className="block text-xs font-medium text-fg">
+                      {account.name} · {account.role}
+                    </span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] text-subtle">
+                      {account.email}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>

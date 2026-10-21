@@ -1,12 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import type { AccessCheckResponse } from "@pichat/shared";
+import { useEffect, useState } from "react";
 import {
   type AclException,
   type AclPermission,
   type AclSubject,
-  accessCountsFor,
-  explainAccessFor,
   findDocument,
   groupMemberCount,
   groups,
@@ -18,12 +17,16 @@ import {
   subjectName,
   users,
 } from "@/lib/admin-data";
+import { apiErrorMessage, checkDocumentAccess } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
+import { useNotImplemented } from "./not-implemented";
 import { useToast } from "./toast";
 import { Badge, Button, InfoBanner, StatusBadge, selectClass } from "./ui";
+import { useApiErrorHandler } from "./use-api-error";
 
 const activeUsers = users.filter((user) => user.status === "active");
 
@@ -116,29 +119,53 @@ export function DocumentAclDrawer({
   onClose: () => void;
 }) {
   const { knowledgeBases, setDocumentExceptions } = useAdminData();
+  const { user } = useAuth();
   const { showToast } = useToast();
+  const handleApiError = useApiErrorHandler();
   const found = findDocument(knowledgeBases, documentId);
   const [exceptions, setExceptions] = useState<AclException[]>(
     () => found?.document.exceptions ?? [],
   );
   const [subjectValue, setSubjectValue] = useState("");
   const [permission, setPermission] = useState<AclPermission>("read");
-  const [checkUserId, setCheckUserId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [discardPrompt, setDiscardPrompt] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [accessCheck, setAccessCheck] = useState<{
+    status: "loading" | "ready" | "error";
+    result?: AccessCheckResponse;
+    error?: string;
+  }>({ status: "loading" });
+
+  useEffect(() => {
+    let active = true;
+    setAccessCheck({ status: "loading" });
+
+    checkDocumentAccess(documentId)
+      .then((result) => {
+        if (active) {
+          setAccessCheck({ status: "ready", result });
+        }
+      })
+      .catch((cause) => {
+        if (active) {
+          setAccessCheck({ status: "error", error: apiErrorMessage(cause) });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [documentId]);
 
   if (!found) {
     return null;
   }
 
   const { knowledgeBase, document } = found;
-  const counts = accessCountsFor(knowledgeBase, document, exceptions);
   const diff = diffExceptions(document.exceptions, exceptions);
   const dirty = diff.total > 0;
-  const selectedUser = activeUsers.find((user) => user.id === checkUserId);
-  const explanation = selectedUser
-    ? explainAccessFor(knowledgeBase, document, selectedUser, exceptions)
-    : null;
+  const draftDenyCount = exceptions.filter((exception) => exception.permission === "deny").length;
   const pendingSubject = parseSubject(subjectValue);
   const subjectInDefault = pendingSubject
     ? knowledgeBase.defaultSubjects.some(
@@ -164,10 +191,17 @@ export function DocumentAclDrawer({
     setError(null);
   }
 
-  function handleSave() {
-    setDocumentExceptions(knowledgeBase.id, document.id, exceptions);
-    showToast("权限已更新，下一次提问生效");
-    onClose();
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await setDocumentExceptions(knowledgeBase.id, document.id, exceptions);
+      showToast("权限已更新，下一次提问生效");
+      onClose();
+    } catch (cause) {
+      await handleApiError(cause);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -176,7 +210,7 @@ export function DocumentAclDrawer({
       onClose={requestClose}
       width="lg"
       title={document.title}
-      description={`${knowledgeBase.name} · ${document.sizeLabel} · 权限变更将在下一次提问时生效`}
+      description={`${knowledgeBase.name} · ${document.sizeLabel ?? "—"} · 权限变更将在下一次提问时生效`}
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-subtle">
@@ -188,8 +222,8 @@ export function DocumentAclDrawer({
             <Button variant="secondary" onClick={requestClose}>
               取消
             </Button>
-            <Button onClick={handleSave} disabled={diff.total === 0}>
-              保存{diff.total > 0 ? ` ${diff.total} 项更改` : ""}
+            <Button onClick={handleSave} disabled={diff.total === 0 || saving}>
+              {saving ? "保存中…" : `保存${diff.total > 0 ? ` ${diff.total} 项更改` : ""}`}
             </Button>
           </div>
         </div>
@@ -214,10 +248,12 @@ export function DocumentAclDrawer({
           <StatusBadge status={document.status} />
           <Badge tone="neutral">{knowledgeBase.name}</Badge>
         </div>
-        <p className="mt-2.5 text-sm font-medium text-fg">{counts.allowed.length} 人可读</p>
+        <p className="mt-2.5 text-sm font-medium text-fg">
+          服务端有效人数：{document.effectiveReaderCount} 人可读
+        </p>
         <p className="mt-1 text-xs leading-5 text-subtle">
-          {counts.denied.length} 人被拒绝 · {counts.exceptionCount} 条文档例外 ·
-          租户管理员始终可读， 不计入可见人数
+          {document.exceptions.length} 条已保存例外 · 草稿 {exceptions.length} 条
+          {diff.total > 0 ? "（尚未保存，人数不会变化）" : ""}
         </p>
       </div>
 
@@ -267,9 +303,7 @@ export function DocumentAclDrawer({
       <section className="mt-5">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-medium text-fg">文档例外</h3>
-          <Badge tone={counts.denyCount > 0 ? "danger" : "outline"}>
-            {counts.exceptionCount} 条
-          </Badge>
+          <Badge tone={draftDenyCount > 0 ? "danger" : "outline"}>{exceptions.length} 条</Badge>
         </div>
         {exceptions.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-subtle">
@@ -366,75 +400,69 @@ export function DocumentAclDrawer({
 
       <section className="mt-5">
         <h3 className="text-xs font-medium text-fg">访问检查</h3>
-        <p className="mt-1 text-[11px] text-subtle">选择一个用户，查看最终判断和原因路径。</p>
-        <div className="mt-2">
-          <select
-            value={checkUserId}
-            onChange={(event) => setCheckUserId(event.target.value)}
-            aria-label="选择要检查的用户"
-            className={selectClass}
-          >
-            <option value="">选择用户…</option>
-            {activeUsers.map((user) => (
-              <option key={user.id} value={user.id}>
-                {user.name} · {roleLabels[user.role]}
-              </option>
-            ))}
-          </select>
-        </div>
-        {selectedUser && explanation ? (
-          <div className="mt-2" role="status" aria-live="polite">
-            <AccessResult
-              explanation={explanation}
-              userName={selectedUser.name}
-              knowledgeBaseName={knowledgeBase.name}
+        <p className="mt-1 text-[11px] leading-5 text-subtle">
+          服务端只判定当前登录用户，基于已保存的权限。前端不能指定其他用户，也不能伪造服务端结果。
+        </p>
+        <div className="mt-2" role="status" aria-live="polite">
+          {accessCheck.status === "loading" ? (
+            <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-subtle">
+              正在请求服务端判定…
+            </p>
+          ) : null}
+          {accessCheck.status === "error" ? (
+            <InfoBanner tone="danger" icon="alert-circle" title="访问检查失败">
+              {accessCheck.error ?? "请稍后重试。"}
+            </InfoBanner>
+          ) : null}
+          {accessCheck.status === "ready" && accessCheck.result ? (
+            <AccessCheckResult
+              result={accessCheck.result}
+              userName={user?.displayName ?? "当前用户"}
             />
-          </div>
-        ) : null}
+          ) : null}
+          {diff.total > 0 ? (
+            <p className="mt-1 text-[11px] leading-5 text-warning">
+              草稿尚未保存，以上服务端判定不包含本次更改。
+            </p>
+          ) : null}
+        </div>
       </section>
     </Drawer>
   );
 }
 
-function AccessResult({
-  explanation,
+function AccessCheckResult({
+  result,
   userName,
-  knowledgeBaseName,
 }: {
-  explanation: ReturnType<typeof explainAccessFor>;
+  result: AccessCheckResponse;
   userName: string;
-  knowledgeBaseName: string;
 }) {
-  if (explanation.reason === "role_override") {
+  if (result.reason === "role_override") {
     return (
       <InfoBanner tone="accent" icon="shield-check" title="允许 · 角色覆盖">
-        {userName} 是租户管理员，始终可读全部文档，不计入可见人数。
+        {userName} 的角色始终可读该文档。服务端有效读者 {result.effectiveReaderCount} 人。
       </InfoBanner>
     );
   }
-  if (explanation.reason === "explicit_deny") {
+  if (result.reason === "explicit_deny") {
     return (
-      <InfoBanner tone="danger" icon="ban" title="拒绝">
-        命中拒绝规则{explanation.subject ? ` · ${subjectName(explanation.subject)}` : ""}。
-        拒绝优先于知识库默认和读取例外。
+      <InfoBanner tone="danger" icon="ban" title="拒绝 · 命中拒绝规则">
+        拒绝优先于知识库默认和读取例外。服务端有效读者 {result.effectiveReaderCount} 人。
       </InfoBanner>
     );
   }
-  if (explanation.reason === "allowed") {
-    const source =
-      explanation.source === "document_exception"
-        ? "文档例外"
-        : `知识库默认 · ${knowledgeBaseName}`;
+  if (result.reason === "allowed") {
     return (
       <InfoBanner tone="accent" icon="check-circle" title="允许">
-        来源：{source}
-        {explanation.subject ? ` · ${subjectName(explanation.subject)}` : ""}。
+        来源为知识库默认范围或文档读取例外。服务端有效读者 {result.effectiveReaderCount} 人。
       </InfoBanner>
     );
   }
   return (
-    <InfoBanner tone="neutral" icon="lock" title="无授权">
-      {userName} 不属于任何允许主体，因此无法读取该文档。
+    <InfoBanner tone="neutral" icon="lock" title="拒绝 · 无授权">
+      {userName} 不属于任何允许主体，因此无法读取该文档。服务端有效读者{" "}
+      {result.effectiveReaderCount} 人。
     </InfoBanner>
   );
 }
@@ -448,8 +476,8 @@ export function BulkAclDialog({
   initialPermission: AclPermission;
   onClose: () => void;
 }) {
-  const { knowledgeBases, setDocumentExceptions } = useAdminData();
-  const { showToast } = useToast();
+  const { knowledgeBases } = useAdminData();
+  const notifyNotImplemented = useNotImplemented();
   const [subjectValue, setSubjectValue] = useState("");
   const [permission, setPermission] = useState<AclPermission>(initialPermission);
   const [error, setError] = useState<string | null>(null);
@@ -465,16 +493,7 @@ export function BulkAclDialog({
       setError("请选择用户或用户组");
       return;
     }
-    const exception: AclException = { ...subject, permission };
-    for (const target of targets) {
-      setDocumentExceptions(
-        target.knowledgeBase.id,
-        target.document.id,
-        mergeException(target.document.exceptions, exception),
-      );
-    }
-    showToast(`已为 ${targets.length} 篇文档更新权限`);
-    onClose();
+    notifyNotImplemented("批量授权");
   }
 
   return (
