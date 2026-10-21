@@ -81,6 +81,13 @@ pnpm --filter @pichat/web dev
 pnpm dev
 ```
 
+本机虚拟内存紧张时，`next dev` 可能在按需编译 BFF 路由时崩溃（`RangeError: Array buffer allocation failed`）。改用生产构建：
+
+```powershell
+pnpm --filter @pichat/web build
+pnpm --filter @pichat/web start
+```
+
 如果本机没有运行 MySQL：
 
 ```powershell

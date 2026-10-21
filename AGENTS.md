@@ -90,6 +90,7 @@ pnpm format
 - `pnpm db:push` 会直接修改数据库；对共享或生产库执行前必须先征得用户同意。
 - Schema 改动后运行 `pnpm db:generate` 生成迁移，不要手改 `packages/db/drizzle/` 下的已生成 SQL。
 - Next.js 的 `output: "standalone"` 曾在 Windows 上触发 symlink EPERM，当前未启用；不要随意加回，除非部署环境支持。
+- 本机虚拟内存偏紧；`next dev` 可能在按需编译 `/api/[...path]` 时因 `RangeError: Array buffer allocation failed` 崩溃。需要稳定查看 UI 时先 `pnpm --filter @pichat/web build` 再 `pnpm --filter @pichat/web start`。
 
 ## 当前完成度
 
