@@ -1,8 +1,10 @@
 import "reflect-metadata";
 import fastifyCookie from "@fastify/cookie";
+import { HttpStatus } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { AppModule } from "./app.module";
+import { ApiException } from "./common/api-error";
 import { ApiExceptionFilter } from "./common/api-exception.filter";
 
 async function bootstrap() {
@@ -22,8 +24,11 @@ async function bootstrap() {
     }
     try {
       done(null, JSON.parse(text));
-    } catch (error) {
-      done(error as Error, undefined);
+    } catch {
+      done(
+        new ApiException("invalid_request", "请求体不是有效 JSON", HttpStatus.BAD_REQUEST),
+        undefined,
+      );
     }
   });
 

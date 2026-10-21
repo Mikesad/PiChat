@@ -47,6 +47,20 @@ export class ApiExceptionFilter implements ExceptionFilter {
       return;
     }
 
+    const fastifyStatus =
+      typeof exception === "object" && exception !== null && "statusCode" in exception
+        ? (exception as { statusCode?: unknown }).statusCode
+        : undefined;
+    if (fastifyStatus === HttpStatus.BAD_REQUEST) {
+      const body: ApiErrorBody = {
+        code: "invalid_request",
+        message: "请求体不是有效 JSON",
+        details: null,
+      };
+      void reply.status(HttpStatus.BAD_REQUEST).send(body);
+      return;
+    }
+
     this.logger.error(exception instanceof Error ? exception.message : "Unhandled error");
     const body: ApiErrorBody = {
       code: "internal_error",

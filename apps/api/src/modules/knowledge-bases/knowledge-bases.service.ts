@@ -83,14 +83,17 @@ export class KnowledgeBasesService {
       throw notFound();
     }
 
-    const readableIds =
-      principal.role === "tenant_admin"
-        ? null
-        : await this.accessControl.listReadableDocumentIds(
-            toAccessPrincipal(principal),
-            knowledgeBase.id,
-          );
-    if (principal.role === "member" && (readableIds?.size ?? 0) === 0) {
+    const seesAllDocuments =
+      principal.role === "tenant_admin" ||
+      principal.role === "knowledge_admin" ||
+      principal.role === "security_admin";
+    const readableIds = seesAllDocuments
+      ? null
+      : await this.accessControl.listReadableDocumentIds(
+          toAccessPrincipal(principal),
+          knowledgeBase.id,
+        );
+    if (!seesAllDocuments && (readableIds?.size ?? 0) === 0) {
       throw notFound();
     }
 

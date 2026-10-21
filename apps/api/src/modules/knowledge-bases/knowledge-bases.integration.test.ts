@@ -22,6 +22,7 @@ const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip
 describeWithDatabase("knowledge base ACL integration", () => {
   const tenantId = randomUUID();
   const adminId = randomUUID();
+  const knowledgeAdminId = randomUUID();
   const memberId = randomUUID();
   const outsiderId = randomUUID();
   const groupId = randomUUID();
@@ -35,6 +36,14 @@ describeWithDatabase("knowledge base ACL integration", () => {
     email: "admin@test.local",
     displayName: "Admin",
     role: "tenant_admin",
+    groupIds: [],
+  };
+  const knowledgeAdminUser: SessionUser = {
+    id: knowledgeAdminId,
+    tenantId,
+    email: "knowledge-admin@test.local",
+    displayName: "Knowledge Admin",
+    role: "knowledge_admin",
     groupIds: [],
   };
   const memberUser: SessionUser = {
@@ -72,6 +81,14 @@ describeWithDatabase("knowledge base ACL integration", () => {
         passwordHash: "scrypt$00$00",
         displayName: adminUser.displayName,
         role: "tenant_admin",
+      },
+      {
+        id: knowledgeAdminId,
+        tenantId,
+        email: knowledgeAdminUser.email,
+        passwordHash: "scrypt$00$00",
+        displayName: knowledgeAdminUser.displayName,
+        role: "knowledge_admin",
       },
       {
         id: memberId,
@@ -218,6 +235,19 @@ describeWithDatabase("knowledge base ACL integration", () => {
     expect(metadata.aclVersion).toBe(2);
     expect(metadata.before).toEqual([]);
     expect(metadata.after).toEqual([{ type: "user", id: memberId, permission: "deny" }]);
+  });
+
+  it("lets knowledge admins list all document metadata without granting read access", async () => {
+    const documents = await service.listDocuments(knowledgeBaseId, knowledgeAdminUser);
+    expect(documents.map((document) => document.id).sort()).toEqual(
+      [allowedDocumentId, deniedDocumentId].sort(),
+    );
+    expect(documents.every((document) => document.canManageAcl)).toBe(true);
+
+    await expect(service.accessCheck(deniedDocumentId, knowledgeAdminUser)).resolves.toMatchObject({
+      allowed: false,
+      reason: "no_grant",
+    });
   });
 
   it("does not leak documents across tenants", async () => {
