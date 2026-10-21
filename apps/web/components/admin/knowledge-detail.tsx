@@ -56,11 +56,22 @@ const filters: Array<{ id: StatusFilter; label: string }> = [
 ];
 
 export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: string }) {
-  const { knowledgeBases, status, error, reload } = useAdminData();
+  const { knowledgeBases, status, error, reload, reparseDocument } = useAdminData();
+  const { showToast } = useToast();
+  const handleApiError = useApiErrorHandler();
   const knowledgeBase = findKnowledgeBase(knowledgeBases, knowledgeBaseId);
   const [tab, setTab] = useState<TabId>("documents");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
+
+  async function handleReparse(documentId: string) {
+    try {
+      await reparseDocument(documentId);
+      showToast("已重新加入解析队列");
+    } catch (cause) {
+      await handleApiError(cause);
+    }
+  }
 
   if (!knowledgeBase && status === "loading") {
     return (
@@ -193,6 +204,7 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
             knowledgeBase={knowledgeBase}
             onOpenAcl={setAclDocumentId}
             onUpload={() => setUploadOpen(true)}
+            onRetry={(documentId) => void handleReparse(documentId)}
           />
         ) : null}
         {tab === "access" ? (
@@ -219,10 +231,12 @@ function DocumentsTab({
   knowledgeBase,
   onOpenAcl,
   onUpload,
+  onRetry,
 }: {
   knowledgeBase: AdminKnowledgeBase;
   onOpenAcl: (documentId: string) => void;
   onUpload: () => void;
+  onRetry: (documentId: string) => void;
 }) {
   const notifyNotImplemented = useNotImplemented();
   const [query, setQuery] = useState("");
@@ -298,7 +312,7 @@ function DocumentsTab({
               title="还没有文档"
               description={
                 knowledgeBase.canManageAcl
-                  ? "上传接口将在后续冲刺接入；当前知识库暂无文档。"
+                  ? "上传 PDF、DOCX、MD 或 TXT 后，由后台解析并自动进入检索范围。"
                   : "当前账号为只读，暂无可查看的文档。"
               }
               action={
@@ -374,7 +388,7 @@ function DocumentsTab({
                     selected={selectedIds.includes(document.id)}
                     onToggle={(checked) => toggleOne(document.id, checked)}
                     onOpenAcl={() => onOpenAcl(document.id)}
-                    onRetry={() => notifyNotImplemented("重试解析")}
+                    onRetry={() => onRetry(document.id)}
                     onDelete={() => notifyNotImplemented("删除文档")}
                   />
                 ))}
@@ -405,7 +419,7 @@ function DocumentsTab({
                 selected={selectedIds.includes(document.id)}
                 onToggle={(checked) => toggleOne(document.id, checked)}
                 onOpenAcl={() => onOpenAcl(document.id)}
-                onRetry={() => notifyNotImplemented("重试解析")}
+                onRetry={() => onRetry(document.id)}
                 onDelete={() => notifyNotImplemented("删除文档")}
               />
             ))}
@@ -481,6 +495,14 @@ function DocumentRow({
         <p className="mt-0.5 text-[11px] text-subtle">
           {document.sizeLabel ?? "—"} · {document.updatedLabel}
         </p>
+        {document.status === "failed" && document.errorMessage ? (
+          <p
+            className="mt-0.5 max-w-[300px] truncate text-[11px] text-danger"
+            title={document.errorMessage}
+          >
+            {document.errorMessage}
+          </p>
+        ) : null}
       </td>
       <td className={tdClass}>
         <StatusBadge status={document.status} />
@@ -570,6 +592,9 @@ function MobileDocumentCard({
           <p className="mt-0.5 text-[11px] text-subtle">
             {document.sizeLabel ?? "—"} · {document.updatedLabel}
           </p>
+          {document.status === "failed" && document.errorMessage ? (
+            <p className="mt-0.5 text-[11px] text-danger">{document.errorMessage}</p>
+          ) : null}
         </div>
         <StatusBadge status={document.status} />
       </div>

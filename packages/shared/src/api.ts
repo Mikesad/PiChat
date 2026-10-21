@@ -1,4 +1,5 @@
 import type { DocumentStatus, UserRole } from "./domain.js";
+import type { ModelProviderId } from "./model-config.js";
 
 export const sessionCookieName = "pichat_session";
 export const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -43,6 +44,7 @@ export type ApiErrorCode =
   | "forbidden"
   | "not_found"
   | "conflict"
+  | "service_unavailable"
   | "internal_error";
 
 export interface ApiErrorBody {
@@ -74,6 +76,8 @@ export interface DocumentSummary {
   sourceKey: string;
   ragflowDocumentId: string | null;
   sizeLabel: string | null;
+  mimeType: string | null;
+  errorMessage: string | null;
   exceptions: AclException[];
   effectiveReaderCount: number;
   canManageAcl: boolean;
@@ -119,4 +123,64 @@ export interface AccessCheckResponse {
   allowed: boolean;
   reason: AccessReason;
   effectiveReaderCount: number;
+}
+
+export interface ModelConfigSummary {
+  id: string;
+  provider: ModelProviderId;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+  isDefault: boolean;
+  hasApiKey: boolean;
+  apiKeyMasked: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelConfigListResponse {
+  modelConfigs: ModelConfigSummary[];
+}
+
+export interface ModelConfigResponse {
+  modelConfig: ModelConfigSummary;
+}
+
+export interface CreateModelConfigRequest {
+  provider: ModelProviderId;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+  apiKey: string;
+  makeDefault?: boolean;
+}
+
+export interface UpdateModelConfigRequest {
+  provider: ModelProviderId;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+  apiKey?: string;
+  makeDefault?: boolean;
+}
+
+export interface UploadDocumentResponse {
+  document: DocumentSummary;
+}
+
+export interface ReparseDocumentResponse {
+  document: DocumentSummary;
+}
+
+export function formatSizeLabel(sizeBytes: number | null | undefined): string | null {
+  if (sizeBytes === null || sizeBytes === undefined || !Number.isFinite(sizeBytes)) {
+    return null;
+  }
+  if (sizeBytes < 1024) {
+    return `${Math.max(0, Math.round(sizeBytes))} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${Math.round(sizeBytes / 1024)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }

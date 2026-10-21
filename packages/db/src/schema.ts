@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   int,
@@ -140,6 +141,9 @@ export const documents = mysqlTable(
     status: mysqlEnum("status", ["pending", "parsing", "ready", "failed", "deleted"])
       .default("pending")
       .notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number", unsigned: true }),
+    mimeType: varchar("mime_type", { length: 120 }),
+    errorMessage: varchar("error_message", { length: 512 }),
     contentHash: varchar("content_hash", { length: 64 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
@@ -277,6 +281,7 @@ export const modelConfigs = mysqlTable(
     baseUrl: varchar("base_url", { length: 512 }),
     encryptedApiKey: text("encrypted_api_key"),
     enabled: boolean("enabled").default(true).notNull(),
+    isDefault: boolean("is_default").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

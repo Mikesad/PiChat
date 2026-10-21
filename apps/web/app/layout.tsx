@@ -31,11 +31,11 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
           {themeScript}
         </Script>
         <ToastProvider>
-          <ModelConfigProvider>
-            <AuthProvider>
+          <AuthProvider>
+            <ModelConfigProvider>
               <AuthGate>{children}</AuthGate>
-            </AuthProvider>
-          </ModelConfigProvider>
+            </ModelConfigProvider>
+          </AuthProvider>
         </ToastProvider>
       </body>
     </html>

@@ -2,13 +2,19 @@ import type {
   AccessCheckResponse,
   ApiErrorBody,
   ApiErrorCode,
+  CreateModelConfigRequest,
   DocumentListResponse,
   KnowledgeBaseListResponse,
+  ModelConfigListResponse,
+  ModelConfigResponse,
+  ReparseDocumentResponse,
   SessionResponse,
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclRequest,
   UpdateKnowledgeBaseAclResponse,
+  UpdateModelConfigRequest,
+  UploadDocumentResponse,
 } from "@pichat/shared";
 
 export class ApiError extends Error {
@@ -130,6 +136,50 @@ export function checkDocumentAccess(documentId: string) {
     method: "POST",
     body: jsonBody({ documentId }),
   });
+}
+
+export function fetchModelConfigs() {
+  return apiRequest<ModelConfigListResponse>("/api/model-configs");
+}
+
+export function createModelConfig(input: CreateModelConfigRequest) {
+  return apiRequest<ModelConfigResponse>("/api/model-configs", {
+    method: "POST",
+    body: jsonBody(input),
+  });
+}
+
+export function updateModelConfig(id: string, input: UpdateModelConfigRequest) {
+  return apiRequest<ModelConfigResponse>(`/api/model-configs/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: jsonBody(input),
+  });
+}
+
+export function deleteModelConfig(id: string) {
+  return apiRequest<void>(`/api/model-configs/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function setDefaultModelConfig(id: string) {
+  return apiRequest<ModelConfigResponse>(`/api/model-configs/${encodeURIComponent(id)}/default`, {
+    method: "POST",
+  });
+}
+
+export function uploadDocument(knowledgeBaseId: string, file: File) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  return apiRequest<UploadDocumentResponse>(
+    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
+    { method: "POST", body: formData },
+  );
+}
+
+export function reparseDocument(documentId: string) {
+  return apiRequest<ReparseDocumentResponse>(
+    `/api/documents/${encodeURIComponent(documentId)}/reparse`,
+    { method: "POST" },
+  );
 }
 
 export function apiErrorMessage(error: unknown) {

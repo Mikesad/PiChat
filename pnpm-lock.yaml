@@ -63,6 +63,9 @@ importers:
       '@fastify/cookie':
         specifier: ^11.0.2
         version: 11.1.3
+      '@fastify/multipart':
+        specifier: ^10.1.4
+        version: 10.1.4
       '@nestjs/common':
         specifier: ^12.2.0
         version: 12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -74,16 +77,22 @@ importers:
         version: 12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-fastify':
         specifier: ^12.2.0
-        version: 12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
+        version: 12.2.0(@fastify/multipart@10.1.4)(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
       '@pichat/access-control':
         specifier: workspace:^
         version: link:../../packages/access-control
       '@pichat/db':
         specifier: workspace:^
         version: link:../../packages/db
+      '@pichat/queue':
+        specifier: workspace:^
+        version: link:../../packages/queue
       '@pichat/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      bullmq:
+        specifier: ^6.3.18
+        version: 6.3.18(ioredis@6.0.0)
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(mysql2@3.24.6(@types/node@22.20.5))
@@ -155,12 +164,27 @@ importers:
 
   apps/worker:
     dependencies:
+      '@pichat/db':
+        specifier: workspace:^
+        version: link:../../packages/db
+      '@pichat/queue':
+        specifier: workspace:^
+        version: link:../../packages/queue
+      '@pichat/ragflow-client':
+        specifier: workspace:^
+        version: link:../../packages/ragflow-client
+      '@pichat/shared':
+        specifier: workspace:^
+        version: link:../../packages/shared
       bullmq:
         specifier: ^6.3.18
         version: 6.3.18(ioredis@6.0.0)
       dotenv:
         specifier: ^18.0.8
         version: 18.0.8
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(mysql2@3.24.6(@types/node@22.20.5))
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -174,6 +198,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/access-control:
     devDependencies:
@@ -212,6 +239,15 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/queue:
+    devDependencies:
+      tsup:
+        specifier: ^9.0.0
+        version: 9.0.0(jiti@2.7.0)(postcss@8.5.31)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/ragflow-client:
     devDependencies:
       tsup:
@@ -220,6 +256,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/shared:
     dependencies:
@@ -906,6 +945,9 @@ packages:
   '@fastify/ajv-compiler@4.0.7':
     resolution: {integrity: sha512-VP0yIfwlc1ohj733keYDqyHm1VWeP9VQxYomunhr90jkC4aNNibbkrRiaNgPgqj1ORxUenILR4qzA/ppYBNAtQ==}
 
+  '@fastify/busboy@3.2.3':
+    resolution: {integrity: sha512-fmo/IKgkenPzz3qTKG+sIUXdF/Kv83AkvvOXJHPTHJeKJbat8SsL1ihUaFaDotqoEl4UZ1Lf8Eb/3vK6eaWX2A==}
+
   '@fastify/cookie@11.1.3':
     resolution: {integrity: sha512-RBhlMNsmSG6C5KGiTkhSXBF75xIrUMSytDDBcpnVewhJ8XVYnJTu+SV6FYKXClIRsBuRjOfKbBSULvnPD3X/mg==}
 
@@ -932,6 +974,9 @@ packages:
 
   '@fastify/middie@9.3.5':
     resolution: {integrity: sha512-oY1Yp/UfwS/qcmSV4PgOEqlTxHytRWSjl5MB07hDhlKfecAwJ4TQ7zBxdX2AWAuq+xbfPXM7EgH7EwOIQ2fSPA==}
+
+  '@fastify/multipart@10.1.4':
+    resolution: {integrity: sha512-J510g4fSp3bXh0DEezcPyMXkQzhn2K3blpSESaOGhqQfzNHR4vhiBBHkdisSM2FU4ltTK/jqObUWs0WmHYNYYg==}
 
   '@fastify/proxy-addr@5.1.2':
     resolution: {integrity: sha512-uqB4QsgVoro0XDC+DIftIMGXHdBPn+lK6Ek3xXAIxPMCJfqxnbtyEoMCm2KPUVOuIosd7Cyw9HawEqMFM/UA+g==}
@@ -4007,6 +4052,8 @@ snapshots:
       ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 4.2.3
 
+  '@fastify/busboy@3.2.3': {}
+
   '@fastify/cookie@11.1.3':
     dependencies:
       cookie: 2.0.1
@@ -4043,6 +4090,14 @@ snapshots:
       find-my-way: 9.10.0
       path-to-regexp: 8.4.2
       reusify: 1.1.0
+
+  '@fastify/multipart@10.1.4':
+    dependencies:
+      '@fastify/busboy': 3.2.3
+      '@fastify/deepmerge': 3.2.2
+      '@fastify/error': 4.2.1
+      fastify-plugin: 6.0.1
+      secure-json-parse: 4.1.1
 
   '@fastify/proxy-addr@5.1.2':
     dependencies:
@@ -4399,7 +4454,7 @@ snapshots:
       tslib: 2.8.1
       uid: 2.0.2
 
-  '@nestjs/platform-fastify@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))':
+  '@nestjs/platform-fastify@12.2.0(@fastify/multipart@10.1.4)(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))':
     dependencies:
       '@fastify/cors': 11.3.1
       '@fastify/formbody': 9.0.1
@@ -4412,6 +4467,8 @@ snapshots:
       light-my-request: 6.8.0
       path-to-regexp: 8.4.2
       tslib: 2.8.1
+    optionalDependencies:
+      '@fastify/multipart': 10.1.4
 
   '@nestjs/schematics@12.0.9(chokidar@5.0.0)(typescript@6.0.3)':
     dependencies:

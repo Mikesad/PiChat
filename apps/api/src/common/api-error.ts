@@ -31,3 +31,7 @@ export function notFound(message = "资源不存在"): ApiException {
 export function conflict(message = "资源冲突"): ApiException {
   return new ApiException("conflict", message, HttpStatus.CONFLICT);
 }
+
+export function serviceUnavailable(message = "服务暂时不可用"): ApiException {
+  return new ApiException("service_unavailable", message, HttpStatus.SERVICE_UNAVAILABLE);
+}

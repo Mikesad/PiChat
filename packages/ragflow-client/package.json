@@ -17,10 +17,12 @@
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",
     "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src"
+    "lint": "biome check src",
+    "test": "vitest run"
   },
   "devDependencies": {
     "tsup": "^9.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
   }
 }

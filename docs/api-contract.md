@@ -10,7 +10,7 @@
 - **ACL 写权限**：`tenant_admin` 与 `knowledge_admin` 可修改文档 ACL 和知识库默认 ACL；`member`、`security_admin` 只读。若用户改为“仅 tenant_admin”，只需调整 `canManageAcl` 和写接口的角色校验。
 - **审计**：A 负责写 `audit_logs`；审计查询 API 和审计页接真属于下一冲刺，B 继续使用现有 mock 审计页。
 - **未接真的 UI**：创建/删除知识库、上传、重试、批量授权本轮不实现后端。B 保留现有入口，点击时提示“本冲刺未接入”，不得写入 mock 数据或伪造审计。
-- **模型配置**：本轮不做服务端接口，继续使用浏览器 sessionStorage；只修正文案为过渡方案。
+- **模型配置**：第一冲刺不做服务端接口；任务 C 已实现用户级加密存储 API，浏览器不再保存密钥（见第 12 节）。
 - **密码**：seed 演示账号统一 `123456`，只用于 demo 租户；数据库只存 scrypt hash。
 
 ## 1. 运行环境
@@ -176,7 +176,8 @@ interface SessionUser {
 
 - `exceptions`：文档级 ACL，包含 `read` 和 `deny`。
 - `effectiveReaderCount`：本租户内 `status = active` 且当前可读该文档的用户数；`tenant_admin` 计入（角色覆盖）。
-- `sizeLabel`：当前 Schema 没有文件大小字段，固定返回 `null`；Web 显示 “—”。
+- `sizeLabel`：由 `documents.size_bytes` 格式化返回（B / KB / MB）；没有大小时返回 `null`。
+- `mimeType` / `errorMessage`：任务 C 新增；解析失败原因写入 `errorMessage`。
 - `canManageAcl`：当前用户角色是否为 `tenant_admin` 或 `knowledge_admin`。
 
 ### 3.4 `PUT /api/documents/:id/acl`
@@ -332,6 +333,7 @@ interface SessionUser {
 | 403 | `forbidden` |
 | 404 | `not_found` |
 | 409 | `conflict` |
+| 503 | `service_unavailable` |
 | 500 | `internal_error` |
 
 不要把密码、token、API Key、数据库连接串写入日志或响应。
@@ -374,3 +376,53 @@ interface SessionUser {
 - 两边只改各自负责的文件；发现需要改对方文件时，先在 handoff 中记录，不要直接改。
 - 合并顺序：A → `master`，B rebase 到最新 `master`，再做端到端验证。
 - 每个任务结束写 `docs/handoff-A.md` 或 `docs/handoff-B.md`；不要在任务分支修改 `docs/当前进度.md`，由集成阶段统一更新。
+
+## 12. 任务 C 新增接口（2026-10-21）
+
+### 12.1 用户级模型配置
+
+所有接口要求登录；`tenantId`、`userId` 只来自 session。响应不包含 `encryptedApiKey` 或明文 API Key。
+
+- `GET /api/model-configs` → `{ modelConfigs: ModelConfigSummary[] }`
+- `POST /api/model-configs` → `201 { modelConfig }`
+  - body：`{ provider, modelId, displayName, baseUrl, apiKey, makeDefault? }`
+  - `provider` 只能是 `opencode-go` 或 `deepseek`；同一 `(tenant, user, provider, modelId)` 重复返回 `409 conflict`。
+- `PUT /api/model-configs/:id` → `200 { modelConfig }`
+  - body 同上；`apiKey` 省略或空字符串时保留旧 Key。
+- `DELETE /api/model-configs/:id` → `204`
+- `POST /api/model-configs/:id/default` → `200 { modelConfig }`
+  - 事务内清除当前用户其他默认配置。
+
+`ModelConfigSummary`：
+
+```ts
+{
+  id: string;
+  provider: "opencode-go" | "deepseek";
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+  isDefault: boolean;
+  hasApiKey: boolean;
+  apiKeyMasked: string; // 如 ****abcd；无 Key 时为空字符串
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；密钥只从 `MODEL_CONFIG_ENCRYPTION_KEY` 读取。
+
+### 12.2 文档上传与重新解析
+
+- `POST /api/knowledge-bases/:id/documents`
+  - `multipart/form-data`，文件字段名 `file`，一次一个文件。
+  - 允许 `.pdf`、`.docx`、`.md`、`.txt`；扩展名与 MIME 白名单同时校验。
+  - 默认最大 20MB，可用 `UPLOAD_MAX_BYTES` 配置。
+  - 文件保存到 `UPLOAD_DIR/<tenantId>/<knowledgeBaseId>/<documentId>/<safeFileName>`；文件名清洗后禁止路径穿越。
+  - 创建 `pending` 文档并入队；成功 `201 { document: DocumentSummary }`。
+  - Redis 不可用：`503 service_unavailable`；文档保留为 `failed`，`errorMessage` 说明队列不可用，可调用重新解析重试。
+  - 仅 `tenant_admin`、`knowledge_admin` 可上传；其他角色 `403`。
+- `POST /api/documents/:id/reparse` → `200 { document }`
+  - 重置 `status=pending`、清空 `errorMessage` 并入队；权限与租户校验同上。
+
+`DocumentSummary` 在原有字段基础上增加 `mimeType`、`errorMessage`，`sizeLabel` 来自 `size_bytes`。

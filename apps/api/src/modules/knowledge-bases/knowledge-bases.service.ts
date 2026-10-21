@@ -22,6 +22,7 @@ import type {
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclResponse,
 } from "@pichat/shared";
+import { formatSizeLabel } from "@pichat/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { forbidden, invalidRequest, notFound } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
@@ -462,7 +463,9 @@ export class KnowledgeBasesService {
       status: document.status,
       sourceKey: document.sourceKey,
       ragflowDocumentId: document.ragflowDocumentId,
-      sizeLabel: null,
+      sizeLabel: formatSizeLabel(document.sizeBytes),
+      mimeType: document.mimeType,
+      errorMessage: document.errorMessage,
       exceptions: exceptionRows
         .map((row) => ({
           type: row.subjectType,

@@ -1,9 +1,17 @@
 import type {
+  CreateDatasetInput,
+  DocumentListInput,
+  RAGFlowDataset,
+  RAGFlowDocument,
   RAGFlowEnvelope,
   RAGFlowOptions,
+  RAGFlowParseState,
+  RawRAGFlowDataset,
+  RawRAGFlowDocument,
   RawRetrievalChunk,
   RetrievalChunk,
   RetrievalInput,
+  UploadDocumentInput,
 } from "./types.js";
 
 export class RAGFlowError extends Error {
@@ -16,6 +24,65 @@ export class RAGFlowError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+function listFromData<T>(data: unknown, keys: string[]): T[] {
+  if (Array.isArray(data)) {
+    return data as T[];
+  }
+  if (data && typeof data === "object") {
+    for (const key of keys) {
+      const value = (data as Record<string, unknown>)[key];
+      if (Array.isArray(value)) {
+        return value as T[];
+      }
+    }
+  }
+  return [];
+}
+
+export function toParseState(raw: RawRAGFlowDocument): RAGFlowParseState {
+  const run = raw.run?.toUpperCase();
+  if (run === "DONE") {
+    return "ready";
+  }
+  if (run === "FAIL" || run === "CANCEL") {
+    return "failed";
+  }
+  if (run === "RUNNING") {
+    return "parsing";
+  }
+
+  const status = typeof raw.status === "number" ? raw.status : Number(raw.status);
+  if (status === 3) {
+    return "ready";
+  }
+  if (status === 4 || status === 2) {
+    return "failed";
+  }
+  if (status === 1) {
+    return "parsing";
+  }
+  return "pending";
+}
+
+function toDocument(raw: RawRAGFlowDocument): RAGFlowDocument {
+  return {
+    id: raw.id ?? "",
+    name: raw.name ?? "",
+    run: raw.run ?? null,
+    progress: typeof raw.progress === "number" ? raw.progress : 0,
+    state: toParseState(raw),
+    errorMessage: raw.run_error_msg ?? raw.message ?? null,
+  };
+}
+
+function toDataset(raw: RawRAGFlowDataset): RAGFlowDataset {
+  return {
+    id: raw.id ?? "",
+    name: raw.name ?? "",
+    embeddingModel: raw.embedding_model ?? null,
+  };
 }
 
 export class RAGFlowClient {
@@ -34,23 +101,35 @@ export class RAGFlowClient {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      const headers = new Headers(init?.headers);
+      headers.set("Authorization", `Bearer ${this.apiKey}`);
+      if (typeof init?.body === "string" && !headers.has("content-type")) {
+        headers.set("Content-Type", "application/json");
+      }
+
       const response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          ...init?.headers,
-        },
+        headers,
         signal: controller.signal,
       });
 
-      const payload = (await response.json()) as RAGFlowEnvelope<T>;
-
-      if (!response.ok || payload.code !== 0) {
+      const text = await response.text();
+      let payload: RAGFlowEnvelope<T> | null = null;
+      try {
+        payload = text.length > 0 ? (JSON.parse(text) as RAGFlowEnvelope<T>) : null;
+      } catch {
         throw new RAGFlowError(
-          payload.message ?? `RAGFlow request failed with status ${response.status}`,
+          `RAGFlow returned a non-JSON response (status ${response.status})`,
           response.status,
-          payload.code,
+          -1,
+        );
+      }
+
+      if (!response.ok || !payload || payload.code !== 0) {
+        throw new RAGFlowError(
+          payload?.message ?? `RAGFlow request failed with status ${response.status}`,
+          response.status,
+          payload?.code ?? -1,
         );
       }
 
@@ -64,8 +143,105 @@ export class RAGFlowClient {
     return this.request("/api/v1/system/healthz");
   }
 
-  async listDatasets(): Promise<unknown> {
-    return this.request("/api/v1/datasets");
+  async listDatasets(): Promise<RAGFlowDataset[]> {
+    const datasets: RAGFlowDataset[] = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const data = await this.request<unknown>(`/api/v1/datasets?page=${page}&page_size=100`);
+      const items = listFromData<RawRAGFlowDataset>(data, ["datasets", "docs"]);
+      datasets.push(...items.map(toDataset));
+      if (items.length < 100) {
+        break;
+      }
+    }
+    return datasets;
+  }
+
+  async getDataset(datasetId: string): Promise<RAGFlowDataset | null> {
+    const datasets = await this.listDatasets();
+    return datasets.find((dataset) => dataset.id === datasetId) ?? null;
+  }
+
+  async createDataset(input: CreateDatasetInput): Promise<RAGFlowDataset> {
+    const data = await this.request<RawRAGFlowDataset>("/api/v1/datasets", {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        embedding_model: input.embeddingModel,
+        chunk_method: input.chunkMethod ?? "naive",
+        ...(input.description ? { description: input.description } : {}),
+      }),
+    });
+    const dataset = toDataset(data ?? {});
+    if (!dataset.id) {
+      throw new RAGFlowError("RAGFlow did not return a dataset id", 200, -1);
+    }
+    return dataset;
+  }
+
+  async uploadDocument(datasetId: string, input: UploadDocumentInput): Promise<RAGFlowDocument> {
+    const copy = new Uint8Array(input.data.length);
+    copy.set(input.data);
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([copy], { type: input.mimeType || "application/octet-stream" }),
+      input.fileName,
+    );
+
+    const data = await this.request<unknown>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/documents`,
+      { method: "POST", body: formData },
+    );
+    const document = listFromData<RawRAGFlowDocument>(data, ["documents", "docs"]).map(
+      toDocument,
+    )[0];
+    if (!document?.id) {
+      throw new RAGFlowError("RAGFlow did not return a document id", 200, -1);
+    }
+    return document;
+  }
+
+  async listDocuments(
+    datasetId: string,
+    input: DocumentListInput = {},
+  ): Promise<RAGFlowDocument[]> {
+    const params = new URLSearchParams({
+      page: String(input.page ?? 1),
+      page_size: String(input.pageSize ?? 100),
+    });
+    if (input.documentId) {
+      params.set("id", input.documentId);
+    }
+    if (input.keywords) {
+      params.set("keywords", input.keywords);
+    }
+
+    const data = await this.request<unknown>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/documents?${params.toString()}`,
+    );
+    return listFromData<RawRAGFlowDocument>(data, ["documents", "docs"]).map(toDocument);
+  }
+
+  async getDocument(datasetId: string, documentId: string): Promise<RAGFlowDocument | null> {
+    const documents = await this.listDocuments(datasetId, {
+      documentId,
+      pageSize: 100,
+    });
+    return documents.find((document) => document.id === documentId) ?? null;
+  }
+
+  async parseDocuments(datasetId: string, documentIds: string[]): Promise<void> {
+    await this.request<unknown>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/chunks`, {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds }),
+    });
+  }
+
+  async deleteDocument(datasetId: string, documentId: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/documents`, {
+      method: "DELETE",
+      body: JSON.stringify({ ids: [documentId] }),
+    });
   }
 
   async retrieve(input: RetrievalInput): Promise<RetrievalChunk[]> {

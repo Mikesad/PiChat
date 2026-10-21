@@ -24,6 +24,7 @@ import {
   apiErrorMessage,
   fetchDocuments,
   fetchKnowledgeBases,
+  reparseDocument as reparseDocumentRequest,
   updateDocumentAcl,
   updateKnowledgeBaseAcl,
 } from "@/lib/api-client";
@@ -43,6 +44,7 @@ interface AdminDataContextValue {
     exceptions: AclException[],
   ) => Promise<void>;
   setDefaultSubjects: (knowledgeBaseId: string, subjects: AclSubject[]) => Promise<void>;
+  reparseDocument: (documentId: string) => Promise<void>;
 }
 
 const AdminDataContext = createContext<AdminDataContextValue | null>(null);
@@ -59,6 +61,8 @@ function mapDocument(document: DocumentSummary): AdminDocument {
     createdAt: document.createdAt,
     sourceKey: document.sourceKey,
     ragflowDocumentId: document.ragflowDocumentId,
+    mimeType: document.mimeType,
+    errorMessage: document.errorMessage,
     exceptions: document.exceptions,
     effectiveReaderCount: document.effectiveReaderCount,
     canManageAcl: document.canManageAcl,
@@ -137,6 +141,22 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     };
   }, [reload]);
 
+  useEffect(() => {
+    const hasUnfinishedDocument = knowledgeBases.some((knowledgeBase) =>
+      knowledgeBase.documents.some(
+        (document) => document.status === "pending" || document.status === "parsing",
+      ),
+    );
+    if (!hasUnfinishedDocument) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void reload();
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [knowledgeBases, reload]);
+
   const setDocumentExceptions = useCallback(
     async (_knowledgeBaseId: string, documentId: string, exceptions: AclException[]) => {
       try {
@@ -167,6 +187,21 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     [reload, logout],
   );
 
+  const reparseDocument = useCallback(
+    async (documentId: string) => {
+      try {
+        await reparseDocumentRequest(documentId);
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
   return (
     <AdminDataContext.Provider
       value={{
@@ -177,6 +212,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
         reload,
         setDocumentExceptions,
         setDefaultSubjects,
+        reparseDocument,
       }}
     >
       {children}

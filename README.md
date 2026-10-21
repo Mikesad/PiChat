@@ -6,7 +6,7 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 
 ## 当前状态
 
-第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。UI 视觉与交互仍在人工验收；上传、RAGFlow、SSE 对话和服务端模型配置尚未开始。
+第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。任务 C 已完成：用户级模型配置加密 API + Web 接真；文档上传、BullMQ 入队、Worker 上传 RAGFlow 并轮询解析状态、失败重试与 Web 状态刷新。当前本机 Redis/RAGFlow 不可用，真实解析 E2E 未执行；SSE 对话、成员编辑和审计查询尚未开始。
 
 已实现：
 
@@ -18,20 +18,22 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 - 文档权限 UI：ACL 抽屉、有效人数、访问检查；有效人数与访问判定来自服务端，批量授权入口保留但未接入
 - 成员与组 UI：本地数据库只读成员/用户组、详情抽屉（仍为 mock 数据）
 - 审计日志 UI：事件流、筛选、详情（页面仍为 mock；ACL 变更已真实写入 `audit_logs`）
-- 模型配置 UI：OpenCode Go / DeepSeek 官方；当前 Key 存在 sessionStorage，元数据存 localStorage
-- NestJS + Fastify API：认证、知识库、文档、ACL、访问检查
+- 模型配置 UI：OpenCode Go / DeepSeek 官方；配置按用户保存在服务端，API Key 使用 AES-256-GCM 加密，浏览器只拿脱敏值
+- 文档上传 UI：真实 multipart 上传、逐文件状态、每 3 秒轮询 `pending`/`parsing`、失败文档重新解析
+- NestJS + Fastify API：认证、知识库、文档上传/重试、ACL、访问检查、用户级模型配置
 - MySQL 8 Schema 与迁移：租户、用户、组、知识库、文档、ACL、会话、消息、审计、模型配置
 - 可重复 seed：1 租户、14 用户、6 组、4 知识库、16 文档，密码 `123456`
 - 文档 ACL 策略：知识库默认 + 文档例外、deny 优先、`tenant_admin` 覆盖；16 个单测
-- API 测试：密码、session token、ACL 集成、跨租户拒绝；共 10 个
-- Fastify Agent Runtime 骨架、BullMQ Worker 骨架、RAGFlow 客户端、共享 SSE 协议、ADR
+- 测试：ACL 16、API 30、Worker 7、RAGFlow client 3，共 56 个
+- `packages/queue`：统一队列名、Job 类型与 Redis 连接参数；Worker 接通 RAGFlow 上传/解析轮询
+- Fastify Agent Runtime 骨架、RAGFlow 客户端、共享 SSE 协议、ADR
 
 尚未实现：
 
-- 服务端模型配置与加密 API Key（当前配置存在浏览器，密钥仅在 sessionStorage）
-- 文档上传、Worker 入库与 RAGFlow 解析轮询
+- 真实 RAGFlow 上传/解析 E2E（本机 Redis 与 RAGFlow 不可用；代码和单测已完成）
 - SSE 对话接口、Agent Runtime 工具 `kb.search` / `kb.read`
 - 本地成员/组编辑、密码重置、审计查询 API 与审计页接真
+- 知识库创建/删除、文档删除、批量授权
 - 生产硬化：CSRF、限流、日志、部署
 - MCP / CLI / 多租户 SaaS
 
@@ -68,6 +70,9 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 ```powershell
 Copy-Item .env.example .env
 # 按本机 MySQL 修改 DATABASE_URL；当前开发机使用 127.0.0.1:3306
+# 生成 32 字节 base64 的 MODEL_CONFIG_ENCRYPTION_KEY 并写入 .env（不要提交）
+$key = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 }))
+Add-Content .env "MODEL_CONFIG_ENCRYPTION_KEY=$key"
 Copy-Item apps/web/.env.local.example apps/web/.env.local
 pnpm install
 pnpm db:push
@@ -93,6 +98,8 @@ pnpm --filter @pichat/web start
 ```powershell
 docker compose -f infra/docker/compose.dev.yaml up -d
 ```
+
+文档上传需要 Redis（`REDIS_URL`）。Worker 还需要 `RAGFLOW_BASE_URL`、`RAGFLOW_API_KEY` 和 `RAGFLOW_DEFAULT_EMBEDDING_MODEL`；缺少时会明确报错，不会伪造解析成功。
 
 `pnpm db:push` 会直接把 Drizzle Schema 应用到数据库。需要可审查的 SQL 迁移时使用 `pnpm db:generate`；迁移已生成在 `packages/db/drizzle/`。`pnpm db:seed` 会重置 demo 租户的知识库/文档/ACL 数据，可重复执行。
 
@@ -128,6 +135,7 @@ packages/
   shared/              SSE 协议、领域类型、Zod Schema
   db/                  Drizzle MySQL Schema 与客户端
   access-control/      文档 ACL 策略
+  queue/               BullMQ 队列名、Job 类型与连接配置
   ragflow-client/      RAGFlow HTTP 客户端
 infra/
   docker/              本地 MySQL、Redis、MinIO
@@ -156,24 +164,23 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 
 ## 验证结果
 
-第一冲刺使用 Node 22.23.3 + 本机 MySQL 验证通过：
+任务 C 使用 Node 22.23.3 + 本机 MySQL 验证通过：
 
-- `pnpm test`：26 个测试通过（ACL 16 + API 10，含跨租户拒绝）
-- `pnpm typecheck`：8 个 workspace 包全部通过
-- `pnpm lint`：8 个 workspace 包全部通过
+- `pnpm test`：56 个测试通过（ACL 16 + API 30 + Worker 7 + RAGFlow client 3）
+- `pnpm typecheck`：9 个 workspace 包全部通过（Turbo `--concurrency=1`）
+- `pnpm lint`：9 个 workspace 包全部通过
 - `pnpm build`：Web、API、Runtime、Worker 与共享包全部通过
-- `pnpm db:push`、`pnpm db:seed` 执行成功，seed 可重复执行
-- 张明/王芳登录后可见知识库和文档不同；deny 优先；ACL 修改后 `acl_version` 递增、有效人数变化、审计有记录
-- 未登录 401、member 写 ACL 403、不存在/跨租户 404
-- Cookie 为 HttpOnly、SameSite=Lax；数据库只存 scrypt hash 和 session token hash
-- Web BFF 已验证登录、me、知识库、文档、ACL、access-check、logout
+- `pnpm db:generate` 生成 `0002_absent_strong_guy.sql`；`pnpm db:push` 应用成功
+- 模型配置 HTTP 验证：创建/列表/更新省略 Key/设为默认/删除；响应不含明文或密文字段
+- Web BFF 验证：登录、模型配置增删查、multipart 上传转发
+- Redis 未启动时上传返回 `503 service_unavailable`，文档保留为 `failed`；非法扩展名返回 `400`
+- 真实 RAGFlow 解析未验证：本机 6379/9380 不可达，`RAGFLOW_API_KEY` 为空、`RAGFLOW_DEFAULT_EMBEDDING_MODEL` 未配置
 
 UI 视觉、响应式和明暗主题仍待人工验收。`pnpm check` 目前会对 `packages/db/drizzle/meta/*.json` 报 Biome 格式差异，`pnpm lint` 通过。
 
 ## 下一步
 
-1. 用户级模型配置 API + 服务端加密 Key；Composer 从 API 取模型列表。
-2. D 盘本地文件上传 + Worker + RAGFlow 解析轮询。
-3. Agent Runtime + SSE 对话 + `kb.search` / `kb.read`。
-4. 本地成员/组编辑、密码重置、审计查询 API 与审计页接真。
-5. 生产硬化：CSRF、限流、日志、迁移与部署。
+1. 配置 Redis 7 与可用 RAGFlow（API Key、embedding 模型），补真实上传 → `pending → parsing → ready` E2E。
+2. Agent Runtime + SSE 对话 + `kb.search` / `kb.read`。
+3. 本地成员/组编辑、密码重置、审计查询 API 与审计页接真。
+4. 生产硬化：CSRF、限流、日志、迁移与部署。

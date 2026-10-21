@@ -1,5 +1,6 @@
 "use client";
 
+import type { CreateModelConfigRequest, ModelConfigSummary, ModelProviderId } from "@pichat/shared";
 import {
   createContext,
   type ReactNode,
@@ -7,18 +8,24 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { defaultDisplayName, type ModelConfig, type ModelProviderId } from "@/lib/model-config";
+import {
+  apiErrorMessage,
+  createModelConfig,
+  deleteModelConfig,
+  fetchModelConfigs,
+  setDefaultModelConfig,
+  updateModelConfig,
+} from "@/lib/api-client";
+import { useAuth } from "../auth/auth-provider";
 import { ModelConfigDrawer } from "./model-config-drawer";
 
-const CONFIGS_KEY = "pichat-model-configs-v2";
-const DEFAULT_KEY = "pichat-default-model-v2";
-const KEY_PREFIX = "pichat-model-key-v2-";
-
 export interface SaveModelConfigInput {
+  id?: string;
   provider: ModelProviderId;
-  apiKey: string;
+  apiKey?: string;
   baseUrl: string;
   modelId: string;
   displayName: string;
@@ -26,159 +33,124 @@ export interface SaveModelConfigInput {
 }
 
 interface ModelConfigContextValue {
-  configs: ModelConfig[];
-  defaultConfigId: ModelProviderId | null;
-  activeConfig: ModelConfig | null;
+  configs: ModelConfigSummary[];
+  defaultConfigId: string | null;
+  activeConfig: ModelConfigSummary | null;
   ready: boolean;
+  error: string | null;
   isOpen: boolean;
   openConfig: () => void;
   closeConfig: () => void;
-  saveConfig: (input: SaveModelConfigInput) => void;
-  removeConfig: (provider: ModelProviderId) => void;
-  setDefaultConfig: (provider: ModelProviderId) => void;
+  reload: () => Promise<void>;
+  saveConfig: (input: SaveModelConfigInput) => Promise<ModelConfigSummary>;
+  removeConfig: (id: string) => Promise<void>;
+  setDefaultConfig: (id: string) => Promise<void>;
 }
 
 const ModelConfigContext = createContext<ModelConfigContextValue | null>(null);
 
-function isProvider(value: unknown): value is ModelProviderId {
-  return value === "opencode-go" || value === "deepseek";
-}
-
-function persist(configs: ModelConfig[], defaultProvider: ModelProviderId | null) {
-  try {
-    window.localStorage.setItem(
-      CONFIGS_KEY,
-      JSON.stringify(
-        configs.map((config) => ({
-          provider: config.provider,
-          baseUrl: config.baseUrl,
-          modelId: config.modelId,
-          displayName: config.displayName,
-          configuredAt: config.configuredAt,
-        })),
-      ),
-    );
-    if (defaultProvider) {
-      window.localStorage.setItem(DEFAULT_KEY, defaultProvider);
-    } else {
-      window.localStorage.removeItem(DEFAULT_KEY);
-    }
-  } catch {
-    // Persistence is best-effort; the current tab still works.
-  }
-}
-
 export function ModelConfigProvider({ children }: { children: ReactNode }) {
-  const [configs, setConfigs] = useState<ModelConfig[]>([]);
-  const [defaultConfigId, setDefaultConfigId] = useState<ModelProviderId | null>(null);
+  const { user } = useAuth();
+  const [configs, setConfigs] = useState<ModelConfigSummary[]>([]);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CONFIGS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Array<Partial<ModelConfig>>;
-        const loaded = parsed.flatMap((item) => {
-          if (!isProvider(item.provider) || !item.baseUrl || !item.modelId) {
-            return [];
-          }
-          const provider = item.provider;
-          return [
-            {
-              provider,
-              apiKey: window.sessionStorage.getItem(KEY_PREFIX + provider) ?? "",
-              baseUrl: item.baseUrl,
-              modelId: item.modelId,
-              displayName: item.displayName ?? item.modelId,
-              configuredAt: item.configuredAt ?? new Date().toISOString(),
-            } satisfies ModelConfig,
-          ];
-        });
-        setConfigs(loaded);
+  const reload = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
 
-        const storedDefault = window.localStorage.getItem(DEFAULT_KEY);
-        if (
-          isProvider(storedDefault) &&
-          loaded.some((config) => config.provider === storedDefault)
-        ) {
-          setDefaultConfigId(storedDefault);
-        } else {
-          setDefaultConfigId(loaded[0]?.provider ?? null);
-        }
-      }
-    } catch {
-      // Ignore malformed local data and start with no configured models.
-    } finally {
+    if (!user) {
+      setConfigs([]);
+      setError(null);
       setReady(true);
+      return;
     }
-  }, []);
 
-  const saveConfig = useCallback(
-    (input: SaveModelConfigInput) => {
-      const next: ModelConfig = {
-        provider: input.provider,
-        apiKey: input.apiKey.trim(),
-        baseUrl: input.baseUrl.trim(),
-        modelId: input.modelId.trim(),
-        displayName: input.displayName.trim() || defaultDisplayName(input.provider, input.modelId),
-        configuredAt: new Date().toISOString(),
-      };
-      const exists = configs.some((config) => config.provider === next.provider);
-      const nextConfigs = exists
-        ? configs.map((config) => (config.provider === next.provider ? next : config))
-        : [...configs, next];
-      const nextDefault =
-        input.makeDefault || !defaultConfigId || defaultConfigId === next.provider
-          ? next.provider
-          : defaultConfigId;
-
-      setConfigs(nextConfigs);
-      setDefaultConfigId(nextDefault);
-      persist(nextConfigs, nextDefault);
-      try {
-        window.sessionStorage.setItem(KEY_PREFIX + next.provider, next.apiKey);
-      } catch {
-        // The key stays in memory for this tab when storage is unavailable.
-      }
-    },
-    [configs, defaultConfigId],
-  );
-
-  const removeConfig = useCallback(
-    (provider: ModelProviderId) => {
-      const nextConfigs = configs.filter((config) => config.provider !== provider);
-      const nextDefault =
-        defaultConfigId === provider ? (nextConfigs[0]?.provider ?? null) : defaultConfigId;
-      setConfigs(nextConfigs);
-      setDefaultConfigId(nextDefault);
-      persist(nextConfigs, nextDefault);
-      try {
-        window.sessionStorage.removeItem(KEY_PREFIX + provider);
-      } catch {
-        // Ignore storage failures.
-      }
-    },
-    [configs, defaultConfigId],
-  );
-
-  const setDefaultConfig = useCallback(
-    (provider: ModelProviderId) => {
-      if (!configs.some((config) => config.provider === provider)) {
+    try {
+      const response = await fetchModelConfigs();
+      if (requestId !== requestIdRef.current) {
         return;
       }
-      setDefaultConfigId(provider);
-      persist(configs, provider);
-    },
-    [configs],
-  );
+      setConfigs(response.modelConfigs);
+      setError(null);
+    } catch (cause) {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      setConfigs([]);
+      setError(apiErrorMessage(cause));
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setReady(true);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const saveConfig = useCallback(async (input: SaveModelConfigInput) => {
+    const payload: CreateModelConfigRequest = {
+      provider: input.provider,
+      modelId: input.modelId.trim(),
+      displayName: input.displayName.trim(),
+      baseUrl: input.baseUrl.trim(),
+      apiKey: input.apiKey?.trim() ?? "",
+      makeDefault: input.makeDefault,
+    };
+
+    let saved: ModelConfigSummary;
+    if (input.id) {
+      const { apiKey, ...rest } = payload;
+      const response = await updateModelConfig(input.id, {
+        ...rest,
+        apiKey: apiKey.length > 0 ? apiKey : undefined,
+      });
+      saved = response.modelConfig;
+    } else {
+      const response = await createModelConfig(payload);
+      saved = response.modelConfig;
+    }
+
+    setConfigs((previous) => {
+      const others = previous.filter((config) => config.id !== saved.id);
+      const next = [...others, saved];
+      return saved.isDefault
+        ? next
+            .map((config) => (config.id === saved.id ? config : { ...config, isDefault: false }))
+            .sort(sortConfigs)
+        : next.sort(sortConfigs);
+    });
+    return saved;
+  }, []);
+
+  const removeConfig = useCallback(async (id: string) => {
+    await deleteModelConfig(id);
+    setConfigs((previous) => previous.filter((config) => config.id !== id));
+  }, []);
+
+  const setDefaultConfig = useCallback(async (id: string) => {
+    const response = await setDefaultModelConfig(id);
+    setConfigs((previous) =>
+      previous
+        .map((config) => ({ ...config, isDefault: config.id === response.modelConfig.id }))
+        .sort(sortConfigs),
+    );
+  }, []);
 
   const openConfig = useCallback(() => setIsOpen(true), []);
   const closeConfig = useCallback(() => setIsOpen(false), []);
 
+  const defaultConfigId = useMemo(
+    () => configs.find((config) => config.isDefault)?.id ?? null,
+    [configs],
+  );
   const activeConfig = useMemo(
-    () => configs.find((config) => config.provider === defaultConfigId) ?? configs[0] ?? null,
-    [configs, defaultConfigId],
+    () => configs.find((config) => config.isDefault) ?? configs[0] ?? null,
+    [configs],
   );
 
   return (
@@ -188,9 +160,11 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
         defaultConfigId,
         activeConfig,
         ready,
+        error,
         isOpen,
         openConfig,
         closeConfig,
+        reload,
         saveConfig,
         removeConfig,
         setDefaultConfig,
@@ -200,6 +174,13 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
       {isOpen ? <ModelConfigDrawer onClose={closeConfig} /> : null}
     </ModelConfigContext.Provider>
   );
+}
+
+function sortConfigs(left: ModelConfigSummary, right: ModelConfigSummary) {
+  if (left.isDefault !== right.isDefault) {
+    return left.isDefault ? -1 : 1;
+  }
+  return right.updatedAt.localeCompare(left.updatedAt);
 }
 
 export function useModelConfig() {

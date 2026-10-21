@@ -16,6 +16,7 @@ const statusCodes: Record<number, ApiErrorCode> = {
   [HttpStatus.FORBIDDEN]: "forbidden",
   [HttpStatus.NOT_FOUND]: "not_found",
   [HttpStatus.CONFLICT]: "conflict",
+  [HttpStatus.SERVICE_UNAVAILABLE]: "service_unavailable",
 };
 
 @Catch()

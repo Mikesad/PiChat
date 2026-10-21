@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import fastifyCookie from "@fastify/cookie";
+import fastifyMultipart from "@fastify/multipart";
 import { HttpStatus } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
@@ -14,6 +15,16 @@ async function bootstrap() {
   );
 
   await app.register(fastifyCookie);
+  const maxUploadBytes = Number(process.env.UPLOAD_MAX_BYTES ?? 20 * 1024 * 1024);
+  await app.register(fastifyMultipart, {
+    limits: {
+      fileSize:
+        Number.isFinite(maxUploadBytes) && maxUploadBytes > 0 ? maxUploadBytes : 20 * 1024 * 1024,
+      files: 1,
+      fields: 2,
+    },
+    throwFileSizeLimit: true,
+  });
 
   const adapter = app.getHttpAdapter() as FastifyAdapter;
   adapter.useBodyParser("application/json", false, {}, (_request, body, done) => {
