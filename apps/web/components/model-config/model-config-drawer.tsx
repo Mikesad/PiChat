@@ -279,7 +279,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
             label="API Key"
             required
             error={errors.apiKey}
-            hint="仅保存在当前标签页的 sessionStorage；真实环境应由服务端加密保存。"
+            hint="过渡方案：仅保存在当前标签页的 sessionStorage；下一冲刺改为服务端加密存储。"
           >
             <div className="relative">
               <input
@@ -397,9 +397,10 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
             </span>
           </label>
 
-          <InfoBanner tone="warning" icon="lock" title="演示环境的密钥处理">
-            API Key 只写入当前标签页的
-            sessionStorage，关闭标签页后清除。接入后端后应改为服务端加密存储，浏览器不再持有明文密钥。
+          <InfoBanner tone="warning" icon="lock" title="过渡方案：密钥仅存浏览器">
+            本冲刺模型配置仍保存在浏览器：元数据在 localStorage，API Key 在当前标签页的
+            sessionStorage，关闭标签页后清除。下一冲刺将改为服务端加密存储
+            （model_configs.encrypted_api_key），浏览器只拿脱敏信息。
           </InfoBanner>
         </form>
       </div>

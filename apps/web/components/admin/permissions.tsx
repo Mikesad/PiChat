@@ -1,15 +1,13 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import {
-  type AdminDocument,
-  type AdminKnowledgeBase,
-  documentAccessCounts,
-} from "@/lib/admin-data";
+import type { AdminDocument, AdminKnowledgeBase } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
-import { Icon } from "../icons";
-import { BulkAclDialog, DocumentAclDrawer } from "./acl";
+import { useAuth } from "../auth/auth-provider";
+import { Icon, Spinner } from "../icons";
+import { DocumentAclDrawer } from "./acl";
 import { useAdminData } from "./admin-data";
+import { useNotImplemented } from "./not-implemented";
 import {
   Badge,
   Button,
@@ -31,7 +29,6 @@ import {
 type StatusFilter = "all" | "ready" | "parsing" | "failed";
 type SortKey = "title" | "updated" | "access";
 type SortDirection = "asc" | "desc";
-type BulkPermission = "read" | "deny";
 
 const statusFilters: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部状态" },
@@ -43,11 +40,13 @@ const statusFilters: Array<{ id: StatusFilter; label: string }> = [
 interface PermissionRow {
   knowledgeBase: AdminKnowledgeBase;
   document: AdminDocument;
-  counts: ReturnType<typeof documentAccessCounts>;
+  denyCount: number;
 }
 
 export function PermissionsPage() {
-  const { knowledgeBases } = useAdminData();
+  const { knowledgeBases, status, error, reload } = useAdminData();
+  const { user } = useAuth();
+  const notifyNotImplemented = useNotImplemented();
   const [query, setQuery] = useState("");
   const [knowledgeBaseFilter, setKnowledgeBaseFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -57,8 +56,8 @@ export function PermissionsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
-  const [bulkPermission, setBulkPermission] = useState<BulkPermission | null>(null);
   const kbSelectId = useId();
+  const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
 
   const rows = useMemo<PermissionRow[]>(
     () =>
@@ -68,7 +67,8 @@ export function PermissionsPage() {
           .map((document) => ({
             knowledgeBase,
             document,
-            counts: documentAccessCounts(knowledgeBase, document),
+            denyCount: document.exceptions.filter((exception) => exception.permission === "deny")
+              .length,
           })),
       ),
     [knowledgeBases],
@@ -90,10 +90,10 @@ export function PermissionsPage() {
       if (statusFilter !== "all" && row.document.status !== statusFilter) {
         return false;
       }
-      if (onlyNoAccess && row.counts.allowed.length > 0) {
+      if (onlyNoAccess && row.document.effectiveReaderCount > 0) {
         return false;
       }
-      if (onlyDeny && row.counts.denyCount === 0) {
+      if (onlyDeny && row.denyCount === 0) {
         return false;
       }
       return true;
@@ -106,7 +106,7 @@ export function PermissionsPage() {
       if (sortKey === "updated") {
         return left.document.updatedAt.localeCompare(right.document.updatedAt);
       }
-      return left.counts.allowed.length - right.counts.allowed.length;
+      return left.document.effectiveReaderCount - right.document.effectiveReaderCount;
     });
 
     return sortDirection === "asc" ? sorted : sorted.reverse();
@@ -122,8 +122,8 @@ export function PermissionsPage() {
   ]);
 
   const totals = useMemo(() => {
-    const noAccess = rows.filter((row) => row.counts.allowed.length === 0).length;
-    const withDeny = rows.filter((row) => row.counts.denyCount > 0).length;
+    const noAccess = rows.filter((row) => row.document.effectiveReaderCount === 0).length;
+    const withDeny = rows.filter((row) => row.denyCount > 0).length;
     return { noAccess, withDeny, documents: rows.length, knowledgeBases: knowledgeBases.length };
   }, [rows, knowledgeBases.length]);
 
@@ -172,23 +172,77 @@ export function PermissionsPage() {
     );
   }
 
-  function openAcl(documentId: string) {
-    setAclDocumentId(documentId);
+  function openAcl(document: AdminDocument) {
+    if (!document.canManageAcl) {
+      return;
+    }
+    setAclDocumentId(document.id);
+  }
+
+  const header = (
+    <PageHeader
+      eyebrow="Access"
+      title="文档权限"
+      description="按文档管理读取与拒绝规则。默认拒绝，拒绝优先，权限变更在下一次提问时生效。"
+      actions={
+        <LinkButton href="/knowledge">
+          <Icon name="book-open" size={14} />
+          管理知识库
+        </LinkButton>
+      }
+    />
+  );
+
+  if (knowledgeBases.length === 0 && status === "loading") {
+    return (
+      <div className="space-y-6">
+        {header}
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-surface px-6 py-16 text-center">
+          <Spinner className="text-accent" />
+          <p className="text-sm text-muted">正在加载文档与权限…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (knowledgeBases.length === 0 && status === "error") {
+    return (
+      <div className="space-y-6">
+        {header}
+        <InfoBanner
+          tone="danger"
+          icon="alert-circle"
+          title="文档权限加载失败"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => void reload()}>
+              重试
+            </Button>
+          }
+        >
+          {error ?? "请稍后重试。"}
+        </InfoBanner>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        eyebrow="Access"
-        title="文档权限"
-        description="按文档管理读取与拒绝规则。默认拒绝，拒绝优先，权限变更在下一次提问时生效。"
-        actions={
-          <LinkButton href="/knowledge">
-            <Icon name="book-open" size={14} />
-            管理知识库
-          </LinkButton>
-        }
-      />
+      {header}
+
+      {status === "error" ? (
+        <InfoBanner
+          tone="danger"
+          icon="alert-circle"
+          title="刷新失败，当前显示上次加载的数据"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => void reload()}>
+              重试
+            </Button>
+          }
+        >
+          {error ?? "请稍后重试。"}
+        </InfoBanner>
+      ) : null}
 
       <StatStrip
         items={[
@@ -196,7 +250,7 @@ export function PermissionsPage() {
           {
             label: "无人可访问",
             value: totals.noAccess,
-            hint: "仅管理员可读",
+            hint: "有效读者为 0",
             tone: totals.noAccess > 0 ? "warning" : "default",
           },
           {
@@ -205,13 +259,12 @@ export function PermissionsPage() {
             hint: "拒绝优先",
             tone: totals.withDeny > 0 ? "danger" : "default",
           },
-          { label: "知识库", value: totals.knowledgeBases, hint: "当前租户" },
+          { label: "知识库", value: totals.knowledgeBases, hint: "当前账号可见" },
         ]}
       />
 
-      <InfoBanner tone="accent" icon="info" title="有效人数不含租户管理员">
-        租户管理员始终可读全部文档，不计入“N
-        人可读”。文档例外叠加在知识库默认范围上，任何拒绝规则都会覆盖读取权限。
+      <InfoBanner tone="accent" icon="info" title="有效人数由服务端计算">
+        服务端按本租户活跃用户、知识库默认范围与文档例外计算有效读者，角色覆盖也计入。修改权限后会重新拉取数据。
       </InfoBanner>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -291,13 +344,13 @@ export function PermissionsPage() {
             title={rows.length === 0 ? "还没有可管理的文档" : "没有匹配的文档"}
             description={
               rows.length === 0
-                ? "先在知识库中上传文档，解析完成后即可在这里配置权限。"
+                ? "当前账号没有可见的文档。上传与解析将在后续冲刺接入。"
                 : "调整筛选条件，或清除筛选后查看全部文档。"
             }
             action={
               rows.length === 0 ? (
                 <LinkButton href="/knowledge" variant="primary">
-                  去知识库上传
+                  查看知识库
                 </LinkButton>
               ) : (
                 <Button variant="secondary" onClick={clearFilters}>
@@ -371,24 +424,32 @@ export function PermissionsPage() {
                     )}
                   >
                     <td className={tdClass}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(row.document.id)}
-                        onChange={(event) => toggleOne(row.document.id, event.target.checked)}
-                        aria-label={`选择 ${row.document.title}`}
-                        className="size-4 cursor-pointer rounded border-border accent-accent"
-                      />
+                      {row.document.canManageAcl ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(row.document.id)}
+                          onChange={(event) => toggleOne(row.document.id, event.target.checked)}
+                          aria-label={`选择 ${row.document.title}`}
+                          className="size-4 cursor-pointer rounded border-border accent-accent"
+                        />
+                      ) : null}
                     </td>
                     <td className={tdClass}>
-                      <button
-                        type="button"
-                        onClick={() => openAcl(row.document.id)}
-                        className="max-w-[320px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
-                      >
-                        {row.document.title}
-                      </button>
+                      {row.document.canManageAcl ? (
+                        <button
+                          type="button"
+                          onClick={() => openAcl(row.document)}
+                          className="max-w-[320px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+                        >
+                          {row.document.title}
+                        </button>
+                      ) : (
+                        <span className="block max-w-[320px] truncate text-sm font-medium text-fg">
+                          {row.document.title}
+                        </span>
+                      )}
                       <p className="mt-0.5 text-[11px] text-subtle">
-                        {row.document.sizeLabel} · {row.document.updatedLabel}
+                        {row.document.sizeLabel ?? "—"} · {row.document.updatedLabel}
                       </p>
                     </td>
                     <td className={tdClass}>
@@ -400,31 +461,27 @@ export function PermissionsPage() {
                       <StatusBadge status={row.document.status} />
                     </td>
                     <td className={tdClass}>
-                      {row.counts.allowed.length === 0 ? (
+                      {row.document.effectiveReaderCount === 0 ? (
                         <Badge tone="warning">无人可访问</Badge>
                       ) : (
                         <>
                           <p className="text-sm tabular-nums text-fg">
-                            {row.counts.allowed.length} 人
+                            {row.document.effectiveReaderCount} 人
                           </p>
-                          <p className="mt-0.5 text-[11px] text-subtle">
-                            {row.counts.denied.length} 人被拒绝
-                          </p>
+                          <p className="mt-0.5 text-[11px] text-subtle">服务端有效人数</p>
                         </>
                       )}
                     </td>
                     <td className={tdClass}>
-                      {row.counts.exceptionCount === 0 ? (
+                      {row.document.exceptions.length === 0 ? (
                         <span className="text-xs text-subtle">—</span>
                       ) : (
                         <>
                           <p className="text-sm tabular-nums text-fg">
-                            {row.counts.exceptionCount} 条
+                            {row.document.exceptions.length} 条
                           </p>
-                          {row.counts.denyCount > 0 ? (
-                            <p className="mt-0.5 text-[11px] text-danger">
-                              {row.counts.denyCount} 条拒绝
-                            </p>
+                          {row.denyCount > 0 ? (
+                            <p className="mt-0.5 text-[11px] text-danger">{row.denyCount} 条拒绝</p>
                           ) : null}
                         </>
                       )}
@@ -433,14 +490,14 @@ export function PermissionsPage() {
                       <p className="text-xs text-muted">{row.document.updatedLabel}</p>
                     </td>
                     <td className={`${tdClass} text-right`}>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => openAcl(row.document.id)}
-                      >
-                        <Icon name="shield-check" size={13} />
-                        设置权限
-                      </Button>
+                      {row.document.canManageAcl ? (
+                        <Button size="sm" variant="secondary" onClick={() => openAcl(row.document)}>
+                          <Icon name="shield-check" size={13} />
+                          设置权限
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-subtle">只读</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -469,24 +526,30 @@ export function PermissionsPage() {
                 className="rounded-xl border border-border bg-surface p-3.5"
               >
                 <div className="flex items-start gap-2.5">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(row.document.id)}
-                    onChange={(event) => toggleOne(row.document.id, event.target.checked)}
-                    aria-label={`选择 ${row.document.title}`}
-                    className="mt-1.5 size-4 shrink-0 cursor-pointer rounded border-border accent-accent"
-                  />
+                  {row.document.canManageAcl ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(row.document.id)}
+                      onChange={(event) => toggleOne(row.document.id, event.target.checked)}
+                      aria-label={`选择 ${row.document.title}`}
+                      className="mt-1.5 size-4 shrink-0 cursor-pointer rounded border-border accent-accent"
+                    />
+                  ) : null}
                   <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-subtle">
                     <Icon name="file-text" size={15} />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      onClick={() => openAcl(row.document.id)}
-                      className="block w-full cursor-pointer truncate text-left text-sm font-medium text-fg"
-                    >
-                      {row.document.title}
-                    </button>
+                    {row.document.canManageAcl ? (
+                      <button
+                        type="button"
+                        onClick={() => openAcl(row.document)}
+                        className="block w-full cursor-pointer truncate text-left text-sm font-medium text-fg"
+                      >
+                        {row.document.title}
+                      </button>
+                    ) : (
+                      <p className="truncate text-sm font-medium text-fg">{row.document.title}</p>
+                    )}
                     <p className="mt-0.5 truncate text-[11px] text-subtle">
                       {row.knowledgeBase.name} · {row.document.updatedLabel}
                     </p>
@@ -494,36 +557,40 @@ export function PermissionsPage() {
                   <StatusBadge status={row.document.status} />
                 </div>
                 <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
-                  {row.counts.allowed.length === 0 ? (
+                  {row.document.effectiveReaderCount === 0 ? (
                     <Badge tone="warning">无人可访问</Badge>
                   ) : (
-                    <span className="text-fg">{row.counts.allowed.length} 人可读</span>
+                    <span className="text-fg">{row.document.effectiveReaderCount} 人可读</span>
                   )}
-                  <span>{row.counts.exceptionCount} 条例外</span>
-                  {row.counts.denyCount > 0 ? (
-                    <span className="text-danger">{row.counts.denyCount} 条拒绝</span>
+                  <span>{row.document.exceptions.length} 条例外</span>
+                  {row.denyCount > 0 ? (
+                    <span className="text-danger">{row.denyCount} 条拒绝</span>
                   ) : null}
                 </div>
-                <div className="mt-3">
-                  <Button size="sm" variant="secondary" onClick={() => openAcl(row.document.id)}>
-                    <Icon name="shield-check" size={13} />
-                    设置权限
-                  </Button>
-                </div>
+                {row.document.canManageAcl ? (
+                  <div className="mt-3">
+                    <Button size="sm" variant="secondary" onClick={() => openAcl(row.document)}>
+                      <Icon name="shield-check" size={13} />
+                      设置权限
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] text-subtle">当前角色只读</p>
+                )}
               </li>
             ))}
           </ul>
         </>
       )}
 
-      {selectedIds.length > 0 ? (
+      {canManage && selectedIds.length > 0 ? (
         <div className="fixed inset-x-3 bottom-4 z-40 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-pop sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2">
           <p className="mr-auto text-xs font-medium text-fg">已选 {selectedIds.length} 篇</p>
-          <Button size="sm" variant="secondary" onClick={() => setBulkPermission("read")}>
+          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
             <Icon name="shield-check" size={13} />
             授予读取
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => setBulkPermission("deny")}>
+          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
             <Icon name="ban" size={13} />
             添加拒绝
           </Button>
@@ -531,17 +598,6 @@ export function PermissionsPage() {
             清除
           </Button>
         </div>
-      ) : null}
-
-      {bulkPermission ? (
-        <BulkAclDialog
-          documentIds={selectedIds}
-          initialPermission={bulkPermission}
-          onClose={() => {
-            setBulkPermission(null);
-            setSelectedIds([]);
-          }}
-        />
       ) : null}
 
       {aclDocumentId ? (
@@ -552,7 +608,9 @@ export function PermissionsPage() {
         />
       ) : null}
 
-      {selectedIds.length > 0 ? <div aria-hidden="true" className="h-16 sm:h-20" /> : null}
+      {canManage && selectedIds.length > 0 ? (
+        <div aria-hidden="true" className="h-16 sm:h-20" />
+      ) : null}
     </div>
   );
 }

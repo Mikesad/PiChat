@@ -2,15 +2,20 @@
 
 import { usePathname } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "@/components/auth/auth-provider";
 import { Icon } from "@/components/icons";
 import { type AdminSection, Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { IconButton } from "@/components/ui";
+import { roleLabels } from "@/lib/admin-data";
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const displayName = user?.displayName ?? "未登录";
+  const roleLabel = user ? roleLabels[user.role] : "—";
 
   const activeSection: AdminSection = pathname.startsWith("/permissions")
     ? "permissions"
@@ -86,11 +91,11 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <ThemeToggle />
           <div className="ml-1 hidden items-center gap-2 border-l border-border pl-3 sm:flex">
             <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface-3 text-[11px] font-semibold text-fg">
-              张
+              {displayName.slice(0, 1)}
             </span>
             <div className="leading-tight">
-              <p className="text-xs font-medium text-fg">张明</p>
-              <p className="text-[10px] text-subtle">租户管理员</p>
+              <p className="text-xs font-medium text-fg">{displayName}</p>
+              <p className="text-[10px] text-subtle">{roleLabel}</p>
             </div>
           </div>
         </header>
