@@ -297,7 +297,7 @@ interface SessionUser {
 - 命令：`pnpm db:seed`（由 A 添加 root 与 `@pichat/db` 脚本）。
 - 数据来源：`apps/web/lib/admin-data.ts` 的 mock 快照；A 必须先复制到 `packages/db/src/seed-data.ts`，避免 B 后续修改影响 seed。
 - 租户：`tenant-demo`，名称 `PiChat Demo`，slug `pichat-demo`。
-- 14 个用户、5 个组、4 个知识库、16 篇文档，ID 与 mock 保持一致。
+- 14 个用户、6 个组（mock 中 `u-zhang`/`u-liu` 引用了未定义的 `g-platform`，seed 补齐该组）、4 个知识库、16 篇文档，ID 与 mock 保持一致。
 - 所有用户密码 `123456`；`u-gu` 保持 `disabled`。
 - `g-all` 等组的 `external_id` 可以保留 mock 值，但 UI 文案必须说明来自本地数据库。
 - 知识库默认 ACL 写入 `knowledge_base_acls`；文档例外写入 `document_acls`；`acl_version = 1`。
