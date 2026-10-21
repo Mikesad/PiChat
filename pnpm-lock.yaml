@@ -72,6 +72,9 @@ importers:
       '@nestjs/platform-fastify':
         specifier: ^12.2.0
         version: 12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.2.0(@nestjs/common@12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
+      '@pichat/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       fastify:
         specifier: ^5.12.7
         version: 5.12.7
@@ -97,6 +100,9 @@ importers:
       '@pichat/access-control':
         specifier: workspace:*
         version: link:../../packages/access-control
+      '@pichat/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       next:
         specifier: 15.5.28
         version: 15.5.28(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
