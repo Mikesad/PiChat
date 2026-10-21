@@ -40,6 +40,8 @@ export interface AdminDocument {
   createdAt: string;
   sourceKey: string;
   ragflowDocumentId?: string | null;
+  mimeType?: string | null;
+  errorMessage?: string | null;
   exceptions: AclException[];
   effectiveReaderCount: number;
   canManageAcl: boolean;

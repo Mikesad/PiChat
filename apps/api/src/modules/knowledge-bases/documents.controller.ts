@@ -1,6 +1,17 @@
-import { Body, Controller, Inject, Param, Put, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Param,
+  Post,
+  Put,
+  UseGuards,
+} from "@nestjs/common";
 import type {
   AclException,
+  ReparseDocumentResponse,
   SessionUser,
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
@@ -9,6 +20,7 @@ import { z } from "zod";
 import { parseBody } from "../../common/validation";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { SessionGuard } from "../auth/session.guard";
+import { DocumentsService } from "./documents.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
 const aclExceptionSchema = z.object({
@@ -26,7 +38,17 @@ const updateDocumentAclSchema = z.object({
 export class DocumentsController {
   constructor(
     @Inject(KnowledgeBasesService) private readonly knowledgeBasesService: KnowledgeBasesService,
+    @Inject(DocumentsService) private readonly documentsService: DocumentsService,
   ) {}
+
+  @Post(":id/reparse")
+  @HttpCode(HttpStatus.OK)
+  async reparse(
+    @Param("id") id: string,
+    @CurrentUser() user: SessionUser,
+  ): Promise<ReparseDocumentResponse> {
+    return { document: await this.documentsService.reparse(user, id) };
+  }
 
   @Put(":id/acl")
   async updateAcl(

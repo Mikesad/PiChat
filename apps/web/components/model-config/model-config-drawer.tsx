@@ -1,14 +1,9 @@
 "use client";
 
+import type { ModelConfigSummary, ModelProviderId } from "@pichat/shared";
 import { type FormEvent, useRef, useState } from "react";
-import {
-  defaultDisplayName,
-  type ModelConfig,
-  type ModelProviderId,
-  maskApiKey,
-  modelProviders,
-  providerOptions,
-} from "@/lib/model-config";
+import { apiErrorMessage } from "@/lib/api-client";
+import { defaultDisplayName, modelProviders, providerOptions } from "@/lib/model-config";
 import { cn } from "@/lib/utils";
 import { Drawer } from "../admin/drawer";
 import { useToast } from "../admin/toast";
@@ -23,70 +18,93 @@ interface FormErrors {
 }
 
 export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
-  const { configs, defaultConfigId, activeConfig, saveConfig, removeConfig, setDefaultConfig } =
-    useModelConfig();
+  const {
+    configs,
+    activeConfig,
+    error: loadError,
+    saveConfig,
+    removeConfig,
+    setDefaultConfig,
+  } = useModelConfig();
   const { showToast } = useToast();
 
-  const initial = activeConfig;
-  const initialProvider = initial?.provider ?? "opencode-go";
+  const initialProvider = activeConfig?.provider ?? "opencode-go";
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [provider, setProvider] = useState<ModelProviderId>(initialProvider);
-  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
-  const [baseUrl, setBaseUrl] = useState(
-    initial?.baseUrl ?? modelProviders[initialProvider].defaultBaseUrl,
-  );
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(modelProviders[initialProvider].defaultBaseUrl);
   const [modelId, setModelId] = useState(
-    initial?.modelId ?? modelProviders[initialProvider].models[0]?.id ?? "",
+    activeConfig?.modelId ?? modelProviders[initialProvider].models[0]?.id ?? "",
   );
-  const [displayName, setDisplayName] = useState(initial?.displayName ?? "");
-  const [makeDefault, setMakeDefault] = useState(
-    initial ? defaultConfigId === initial.provider || !defaultConfigId : true,
-  );
+  const [displayName, setDisplayName] = useState("");
+  const [makeDefault, setMakeDefault] = useState(configs.length === 0);
   const [showKey, setShowKey] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const modelIdRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
 
-  const isCurrentDefault = defaultConfigId === provider;
+  const editingConfig = editingId
+    ? (configs.find((config) => config.id === editingId) ?? null)
+    : null;
+  const isEditing = editingConfig !== null;
+  const isCurrentDefault = editingConfig?.isDefault ?? false;
   const providerDefinition = modelProviders[provider];
 
-  function fillFromConfig(config: ModelConfig) {
+  function resetForm() {
+    const nextProvider = activeConfig?.provider ?? "opencode-go";
+    setEditingId(null);
+    setProvider(nextProvider);
+    setApiKey("");
+    setBaseUrl(modelProviders[nextProvider].defaultBaseUrl);
+    setModelId(modelProviders[nextProvider].models[0]?.id ?? "");
+    setDisplayName("");
+    setMakeDefault(configs.length === 0);
+    setErrors({});
+    setError(null);
+    setShowKey(false);
+  }
+
+  function fillFromConfig(config: ModelConfigSummary) {
+    setEditingId(config.id);
     setProvider(config.provider);
-    setApiKey(config.apiKey);
-    setBaseUrl(config.baseUrl);
+    setApiKey("");
+    setBaseUrl(config.baseUrl || modelProviders[config.provider].defaultBaseUrl);
     setModelId(config.modelId);
     setDisplayName(config.displayName);
-    setMakeDefault(defaultConfigId === config.provider || !defaultConfigId);
+    setMakeDefault(config.isDefault);
     setErrors({});
+    setError(null);
+    setShowKey(false);
   }
 
   function selectProvider(next: ModelProviderId) {
-    const existing = configs.find((config) => config.provider === next);
-    if (existing) {
-      fillFromConfig(existing);
+    if (next === provider) {
       return;
     }
     setProvider(next);
-    setApiKey("");
-    setBaseUrl(modelProviders[next].defaultBaseUrl);
-    setModelId(modelProviders[next].models[0]?.id ?? "");
-    setDisplayName("");
-    setMakeDefault(!defaultConfigId);
+    if (!isEditing) {
+      setBaseUrl(modelProviders[next].defaultBaseUrl);
+      setModelId(modelProviders[next].models[0]?.id ?? "");
+      setDisplayName("");
+    }
     setErrors({});
   }
 
-  function handleEdit(config: ModelConfig) {
+  function handleEdit(config: ModelConfigSummary) {
     fillFromConfig(config);
     window.requestAnimationFrame(() => {
       formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextErrors: FormErrors = {};
-    if (apiKey.trim().length === 0) {
+    if (!isEditing && apiKey.trim().length === 0) {
       nextErrors.apiKey = "请输入 API Key";
     }
     if (!/^https?:\/\//.test(baseUrl.trim())) {
@@ -108,29 +126,47 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
     }
 
     const label = displayName.trim() || defaultDisplayName(provider, modelId);
-    const willBecomeDefault = makeDefault || !defaultConfigId || isCurrentDefault;
-    saveConfig({
-      provider,
-      apiKey,
-      baseUrl,
-      modelId,
-      displayName: label,
-      makeDefault,
-    });
-    showToast(willBecomeDefault ? `对话模型已切换为 ${label}` : `模型配置已保存：${label}`);
-    onClose();
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await saveConfig({
+        id: editingId ?? undefined,
+        provider,
+        apiKey: apiKey.trim() || undefined,
+        baseUrl,
+        modelId,
+        displayName: label,
+        makeDefault,
+      });
+      showToast(saved.isDefault ? `对话模型已切换为 ${label}` : `模型配置已保存：${label}`);
+      onClose();
+    } catch (cause) {
+      setError(apiErrorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleRemove(config: ModelConfig) {
-    removeConfig(config.provider);
-    showToast(`已移除模型：${config.displayName}`);
-    if (config.provider === provider) {
-      const next = configs.find((item) => item.provider !== config.provider);
-      if (next) {
-        fillFromConfig(next);
-      } else {
-        selectProvider("opencode-go");
+  async function handleRemove(config: ModelConfigSummary) {
+    setError(null);
+    try {
+      await removeConfig(config.id);
+      showToast(`已移除模型：${config.displayName}`);
+      if (editingId === config.id) {
+        resetForm();
       }
+    } catch (cause) {
+      setError(apiErrorMessage(cause));
+    }
+  }
+
+  async function handleSetDefault(config: ModelConfigSummary) {
+    setError(null);
+    try {
+      await setDefaultConfig(config.id);
+      showToast(`默认模型已切换为 ${config.displayName}`);
+    } catch (cause) {
+      setError(apiErrorMessage(cause));
     }
   }
 
@@ -140,21 +176,29 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       width="lg"
       title="模型配置"
-      description="当前支持 OpenCode Go 套餐与 DeepSeek 官方 API。保存后输入框底部的模型会立即更新。"
+      description="当前支持 OpenCode Go 套餐与 DeepSeek 官方 API。配置按账号保存在服务端，API Key 只返回脱敏信息。"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] text-subtle">API Key 不写入 localStorage</p>
+          <p className="text-[11px] text-subtle">API Key 由服务端加密保存，浏览器不持久化明文</p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" form="model-config-form">
-              保存模型
+            <Button type="submit" form="model-config-form" disabled={saving}>
+              {saving ? "保存中…" : isEditing ? "保存修改" : "保存模型"}
             </Button>
           </div>
         </div>
       }
     >
+      {loadError ? (
+        <div className="mb-4">
+          <InfoBanner tone="danger" icon="alert-circle" title="模型配置加载失败">
+            {loadError}
+          </InfoBanner>
+        </div>
+      ) : null}
+
       {configs.length > 0 ? (
         <section>
           <div className="flex items-center justify-between gap-2">
@@ -163,10 +207,10 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
           </div>
           <ul className="mt-2 space-y-2">
             {configs.map((config) => {
-              const isDefault = defaultConfigId === config.provider;
+              const isDefault = config.isDefault;
               return (
                 <li
-                  key={config.provider}
+                  key={config.id}
                   className={cn(
                     "rounded-xl border p-3",
                     isDefault ? "border-accent bg-accent-soft/50" : "border-border bg-surface",
@@ -183,7 +227,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <p className="text-sm font-medium text-fg">{config.displayName}</p>
                         {isDefault ? <Badge tone="accent">默认</Badge> : null}
-                        {!config.apiKey ? <Badge tone="warning">密钥缺失</Badge> : null}
+                        {!config.hasApiKey ? <Badge tone="warning">密钥缺失</Badge> : null}
                       </div>
                       <p className="mt-0.5 text-[11px] text-subtle">
                         {modelProviders[config.provider].label} · {config.modelId}
@@ -192,7 +236,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                         {config.baseUrl}
                       </p>
                       <p className="mt-0.5 font-mono text-[10px] text-subtle">
-                        {maskApiKey(config.apiKey)}
+                        {config.apiKeyMasked || "未保存密钥"}
                       </p>
                     </div>
                   </div>
@@ -201,10 +245,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => {
-                          setDefaultConfig(config.provider);
-                          showToast(`默认模型已切换为 ${config.displayName}`);
-                        }}
+                        onClick={() => void handleSetDefault(config)}
                       >
                         设为默认
                       </Button>
@@ -214,7 +255,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                     </Button>
                     <button
                       type="button"
-                      onClick={() => handleRemove(config)}
+                      onClick={() => void handleRemove(config)}
                       className="inline-flex h-9 cursor-pointer items-center rounded-lg px-2.5 text-xs font-medium text-danger transition-colors duration-150 hover:bg-danger-soft"
                     >
                       移除
@@ -232,12 +273,27 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
       )}
 
       <div ref={formRef} className="mt-5 scroll-mt-2">
-        <h3 className="text-xs font-medium text-fg">
-          {configs.some((config) => config.provider === provider) ? "更新模型参数" : "添加模型"}
-        </h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-medium text-fg">{isEditing ? "更新模型参数" : "添加模型"}</h3>
+          {isEditing ? (
+            <Button size="sm" variant="ghost" onClick={resetForm}>
+              取消编辑
+            </Button>
+          ) : null}
+        </div>
         <p className="mt-1 text-[11px] leading-5 text-subtle">
-          选择服务商后填写 API Key、Base URL 与模型 ID。同一服务商再次保存会覆盖旧配置。
+          {isEditing
+            ? "API Key 留空表示保留服务端已保存的密钥。"
+            : "选择服务商后填写 API Key、Base URL 与模型 ID。同一服务商下可配置多个模型。"}
         </p>
+
+        {error ? (
+          <div className="mt-3">
+            <InfoBanner tone="danger" icon="alert-circle" title="保存失败">
+              {error}
+            </InfoBanner>
+          </div>
+        ) : null}
 
         <form id="model-config-form" onSubmit={handleSubmit} className="mt-3 space-y-4" noValidate>
           <fieldset>
@@ -277,9 +333,13 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
           <FormField
             id="model-api-key"
             label="API Key"
-            required
+            required={!isEditing}
             error={errors.apiKey}
-            hint="过渡方案：仅保存在当前标签页的 sessionStorage；下一冲刺改为服务端加密存储。"
+            hint={
+              isEditing
+                ? `已保存密钥：${editingConfig?.apiKeyMasked || "未保存"}；留空表示不修改。`
+                : "提交后立即加密存储，接口响应与日志都不会包含明文。"
+            }
           >
             <div className="relative">
               <input
@@ -293,7 +353,13 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                 }}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder={provider === "deepseek" ? "sk-…" : "OpenCode Go API Key"}
+                placeholder={
+                  isEditing
+                    ? "留空保持现有密钥"
+                    : provider === "deepseek"
+                      ? "sk-…"
+                      : "OpenCode Go API Key"
+                }
                 aria-invalid={errors.apiKey ? true : undefined}
                 aria-describedby={errors.apiKey ? "model-api-key-error" : "model-api-key-hint"}
                 className={cn(inputClass, "pr-10")}
@@ -397,10 +463,9 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
             </span>
           </label>
 
-          <InfoBanner tone="warning" icon="lock" title="过渡方案：密钥仅存浏览器">
-            本冲刺模型配置仍保存在浏览器：元数据在 localStorage，API Key 在当前标签页的
-            sessionStorage，关闭标签页后清除。下一冲刺将改为服务端加密存储
-            （model_configs.encrypted_api_key），浏览器只拿脱敏信息。
+          <InfoBanner tone="accent" icon="lock" title="密钥由服务端加密保存">
+            API Key 使用 AES-256-GCM 加密后写入数据库，接口只返回 hasApiKey
+            与末尾四位。浏览器不再使用 localStorage 或 sessionStorage 保存密钥。
           </InfoBanner>
         </form>
       </div>

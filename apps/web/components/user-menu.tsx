@@ -137,7 +137,7 @@ export function UserMenu() {
         onClose={() => setLogoutOpen(false)}
         onConfirm={handleLogout}
         title="退出登录？"
-        description="当前会话将结束，并返回登录页面。模型配置会保留在本机。"
+        description="当前会话将结束，并返回登录页面。模型配置保存在服务端账号下。"
         confirmLabel="退出登录"
         tone="danger"
       />

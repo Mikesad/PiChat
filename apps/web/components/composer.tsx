@@ -1,8 +1,8 @@
 "use client";
 
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
-import type { ModelProviderId } from "@/lib/model-config";
 import { cn } from "@/lib/utils";
+import { useToast } from "./admin/toast";
 import { Icon } from "./icons";
 import { useModelConfig } from "./model-config/model-config-provider";
 
@@ -33,13 +33,14 @@ export function Composer({
   focusKey,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { configs, defaultConfigId, setDefaultConfig } = useModelConfig();
+  const { configs, defaultConfigId, activeConfig, setDefaultConfig } = useModelConfig();
+  const { showToast } = useToast();
   const [thinking, setThinking] = useState("medium");
   const modelId = useId();
   const thinkingId = useId();
 
-  const activeModelId = defaultConfigId ?? configs[0]?.provider ?? "none";
-  const activeModel = configs.find((config) => config.provider === activeModelId);
+  const activeModelId = defaultConfigId ?? configs[0]?.id ?? "none";
+  const activeModel = activeConfig;
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -96,7 +97,9 @@ export function Composer({
                   value={configs.length > 0 ? activeModelId : "none"}
                   onChange={(event) => {
                     if (event.target.value !== "none") {
-                      setDefaultConfig(event.target.value as ModelProviderId);
+                      void setDefaultConfig(event.target.value).catch(() => {
+                        showToast("切换默认模型失败，请稍后重试", "danger");
+                      });
                     }
                   }}
                   disabled={configs.length === 0}
@@ -107,10 +110,10 @@ export function Composer({
                   )}
                 >
                   {configs.length === 0 ? (
-                    <option value="none">未配置模型</option>
+                    <option value="none">尚未配置模型</option>
                   ) : (
                     configs.map((config) => (
-                      <option key={config.provider} value={config.provider}>
+                      <option key={config.id} value={config.id}>
                         {config.displayName}
                       </option>
                     ))
