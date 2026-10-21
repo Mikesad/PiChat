@@ -6,38 +6,34 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 
 ## 当前状态
 
-当前仓库已完成对话主界面与管理端 UI 的第一版，数据仍以 mock 为主，后端接口尚未接通。
+第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。UI 视觉与交互仍在人工验收；上传、RAGFlow、SSE 对话和服务端模型配置尚未开始。
 
 已实现：
 
 - pnpm + Turborepo monorepo
-- Next.js 15 对话主界面：流式回答、思考过程、工具调用、引用联动、明暗主题、移动端适配
-- 登录页与 mock 会话：未登录访问重定向到 `/login`，任意有效邮箱 + 任意密码可进入
-- 左下角账号菜单：模型配置（OpenCode Go / DeepSeek 官方）与退出登录
-- 模型配置保存后，输入框底部的模型选择器立即切换；API Key 仅保存在当前标签页
-- 知识库管理 UI：列表、详情、文档状态、上传抽屉、默认访问范围、设置
-- 文档权限 UI：文档权限表、ACL 抽屉、有效人数、访问检查、批量授权
-- 成员与组 UI：IdP 只读同步、成员/用户组详情、有效可读文档数（mock）
-- 审计日志 UI：权限与管理事件流、筛选与事件详情（mock，跨页面可见）
-- NestJS API 与健康检查
-- Fastify Agent Runtime 骨架：Pi SDK Session 工厂、事件映射
-- BullMQ 文档入库 Worker 骨架
-- MySQL 8 Schema：租户、用户、用户组、文档、ACL、会话、消息、审计日志、模型配置
-- 文档 ACL 策略包，8 个单元测试通过；`tenant_admin` 角色覆盖
-- RAGFlow 客户端：健康检查、数据集列表、检索
-- 共享 SSE 事件协议
-- 架构决策记录（ADR）
+- Next.js 15 对话主界面：流式回答、思考过程、工具调用、引用联动、明暗主题、移动端适配（对话流仍为 mock）
+- 邮箱 + 密码登录：MySQL 用户 + scrypt 密码 hash + `auth_sessions` + HttpOnly Cookie
+- Web BFF：登录、登出、me、知识库/文档/ACL 请求统一转发，浏览器不直连 API/RAGFlow
+- 知识库管理 UI：列表、详情、文档状态、默认访问范围、设置；列表/详情/文档/ACL 读写已接真实 API
+- 文档权限 UI：ACL 抽屉、有效人数、访问检查；有效人数与访问判定来自服务端，批量授权入口保留但未接入
+- 成员与组 UI：本地数据库只读成员/用户组、详情抽屉（仍为 mock 数据）
+- 审计日志 UI：事件流、筛选、详情（页面仍为 mock；ACL 变更已真实写入 `audit_logs`）
+- 模型配置 UI：OpenCode Go / DeepSeek 官方；当前 Key 存在 sessionStorage，元数据存 localStorage
+- NestJS + Fastify API：认证、知识库、文档、ACL、访问检查
+- MySQL 8 Schema 与迁移：租户、用户、组、知识库、文档、ACL、会话、消息、审计、模型配置
+- 可重复 seed：1 租户、14 用户、6 组、4 知识库、16 文档，密码 `123456`
+- 文档 ACL 策略：知识库默认 + 文档例外、deny 优先、`tenant_admin` 覆盖；16 个单测
+- API 测试：密码、session token、ACL 集成、跨租户拒绝；共 10 个
+- Fastify Agent Runtime 骨架、BullMQ Worker 骨架、RAGFlow 客户端、共享 SSE 协议、ADR
 
 尚未实现：
 
-- OIDC / Keycloak 登录（当前为 mock 登录页与会话）
 - 服务端模型配置与加密 API Key（当前配置存在浏览器，密钥仅在 sessionStorage）
-- 知识库、文档、ACL 的真实仓储与管理接口（当前管理端使用 mock 数据）
-- 文档上传与 RAGFlow 解析轮询
-- SSE 对话接口
-- 真实 IdP 成员同步、角色编辑与服务端审计写入（当前 UI 为 mock）
-- 模型配置界面
-- MCP 与 CLI 工具
+- 文档上传、Worker 入库与 RAGFlow 解析轮询
+- SSE 对话接口、Agent Runtime 工具 `kb.search` / `kb.read`
+- 本地成员/组编辑、密码重置、审计查询 API 与审计页接真
+- 生产硬化：CSRF、限流、日志、部署
+- MCP / CLI / 多租户 SaaS
 
 > 注意：`apps/agent-runtime` 目前只有健康检查和 Pi Session 工厂，还不能创建会话、发送消息或调用工具。`/internal/runtime` 返回的 capabilities 是能力声明，不代表已经接通。
 
@@ -53,7 +49,7 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 | RAG | RAGFlow Retrieval API |
 | 元数据 | MySQL 8、Drizzle ORM |
 | 队列与缓存 | Redis 7、BullMQ |
-| 对象存储 | S3 / MinIO |
+| 文档存储 | 本地磁盘（MVP）；S3 / MinIO 后续 |
 | Lint / 格式化 | Biome |
 
 ## 环境要求
@@ -71,9 +67,17 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 
 ```powershell
 Copy-Item .env.example .env
+# 按本机 MySQL 修改 DATABASE_URL；当前开发机使用 127.0.0.1:3306
 Copy-Item apps/web/.env.local.example apps/web/.env.local
 pnpm install
 pnpm db:push
+pnpm db:seed
+
+# 只启动 API + Web（UI 联调）
+pnpm --filter @pichat/api dev
+pnpm --filter @pichat/web dev
+
+# 或启动全部 workspace（需要 Redis/RAGFlow 可用）
 pnpm dev
 ```
 
@@ -83,7 +87,15 @@ pnpm dev
 docker compose -f infra/docker/compose.dev.yaml up -d
 ```
 
-`pnpm db:push` 会直接把 Drizzle Schema 应用到数据库。需要可审查的 SQL 迁移时使用 `pnpm db:generate`；初始迁移已经生成在 `packages/db/drizzle/`。
+`pnpm db:push` 会直接把 Drizzle Schema 应用到数据库。需要可审查的 SQL 迁移时使用 `pnpm db:generate`；迁移已生成在 `packages/db/drizzle/`。`pnpm db:seed` 会重置 demo 租户的知识库/文档/ACL 数据，可重复执行。
+
+种子账号（密码均为 `123456`）：
+
+- 张明：`zhang.ming@example.com`（tenant_admin）
+- 王芳：`wang.fang@example.com`（member）
+- 陈晨：`chen.chen@example.com`（knowledge_admin）
+- 刘洋：`liu.yang@example.com`（security_admin）
+- 顾强：`gu.qiang@example.com`（disabled）
 
 ## 服务端口
 
@@ -92,6 +104,7 @@ docker compose -f infra/docker/compose.dev.yaml up -d
 | Web | http://localhost:3000 |
 | API | http://localhost:3001/api/health |
 | Agent Runtime | http://localhost:3002/internal/health |
+| MySQL（本机） | localhost:3306 |
 | MySQL（Compose） | localhost:3307 |
 | Redis | localhost:6379 |
 | MinIO 控制台 | http://localhost:9001 |
@@ -136,23 +149,24 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 
 ## 验证结果
 
-脚手架使用 Node 22.23.3 验证通过：
+第一冲刺使用 Node 22.23.3 + 本机 MySQL 验证通过：
 
-- `pnpm test`：8 个 ACL 策略测试通过
+- `pnpm test`：26 个测试通过（ACL 16 + API 10，含跨租户拒绝）
 - `pnpm typecheck`：8 个 workspace 包全部通过
 - `pnpm lint`：8 个 workspace 包全部通过
 - `pnpm build`：Web、API、Runtime、Worker 与共享包全部通过
-- 管理端 UI 使用 mock 数据完成：知识库列表/详情、上传流程、文档权限表、ACL 抽屉、访问检查、批量授权
-- 登录 → 模型配置（OpenCode Go / DeepSeek 官方）→ 对话模型切换 → 退出登录 → 重新登录恢复配置，全流程本地验证通过
-- API、Runtime、Web 健康检查接口本地返回正常
+- `pnpm db:push`、`pnpm db:seed` 执行成功，seed 可重复执行
+- 张明/王芳登录后可见知识库和文档不同；deny 优先；ACL 修改后 `acl_version` 递增、有效人数变化、审计有记录
+- 未登录 401、member 写 ACL 403、不存在/跨租户 404
+- Cookie 为 HttpOnly、SameSite=Lax；数据库只存 scrypt hash 和 session token hash
+- Web BFF 已验证登录、me、知识库、文档、ACL、access-check、logout
 
-未执行完整 `pnpm dev` 联调，因为本机 MySQL、Redis、RAGFlow 尚未启动。`pnpm db:push` 也未执行，避免直接修改本机数据库。
+UI 视觉、响应式和明暗主题仍待人工验收。`pnpm check` 目前会对 `packages/db/drizzle/meta/*.json` 报 Biome 格式差异，`pnpm lint` 通过。
 
 ## 下一步
 
-1. 把管理端 mock 数据与模型配置替换为真实接口：知识库、文档、ACL、有效人数、访问检查、成员同步、审计与模型密钥。
-2. 接入企业 IdP（OIDC / Keycloak）与 HttpOnly 会话 Cookie，替换 mock 登录。
-3. 实现文档上传与 RAGFlow 解析轮询。
-4. 实现 ACL 仓储与 `allowedDocumentIds`。
-5. 增加 SSE 对话接口与 Pi 工具：`kb.search`、`kb.read`。
-6. 完成流式对话、引用展示、模型与思考强度切换。
+1. 用户级模型配置 API + 服务端加密 Key；Composer 从 API 取模型列表。
+2. D 盘本地文件上传 + Worker + RAGFlow 解析轮询。
+3. Agent Runtime + SSE 对话 + `kb.search` / `kb.read`。
+4. 本地成员/组编辑、密码重置、审计查询 API 与审计页接真。
+5. 生产硬化：CSRF、限流、日志、迁移与部署。

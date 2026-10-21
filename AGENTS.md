@@ -84,8 +84,8 @@ pnpm format
 
 ## 环境与本地服务
 
-- 根 `.env` 供 API / Runtime / Worker 使用；Web 使用 `apps/web/.env.local`。
-- Docker MySQL 映射到 **3307**，Redis 6379，MinIO 9000/9001。
+- 根 `.env` 供 API / Runtime / Worker 使用；Web 使用 `apps/web/.env.local` 的 `API_URL`。
+- 当前开发机使用本机 MySQL **3306** 和专用库 `pichat`；Docker Compose 仍映射 3307，Redis 6379，MinIO 9000/9001。
 - RAGFlow 使用独立部署，不包含在 `infra/docker/compose.dev.yaml` 中。
 - `pnpm db:push` 会直接修改数据库；对共享或生产库执行前必须先征得用户同意。
 - Schema 改动后运行 `pnpm db:generate` 生成迁移，不要手改 `packages/db/drizzle/` 下的已生成 SQL。
@@ -93,12 +93,12 @@ pnpm format
 
 ## 当前完成度
 
-已实现：monorepo、对话主界面、登录页与 mock 会话、模型配置 UI（OpenCode Go / DeepSeek，浏览器会话密钥）、知识库与文档权限管理 UI、成员与组和审计日志 UI（均使用 mock 数据）、API 健康检查、Runtime 骨架、Worker 骨架、MySQL Schema、ACL 纯策略与 8 个单测、RAGFlow 客户端、SSE 协议。
+已实现：monorepo、对话主界面、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、模型配置 UI（浏览器会话密钥）、成员与组和审计日志 UI（仍为 mock）、Runtime/Worker 骨架、MySQL Schema、ACL 纯策略与 API 测试共 26 个、RAGFlow 客户端、SSE 协议。
 
-未实现：真实 OIDC 登录、服务端模型配置与加密密钥、知识库/文档 ACL 真实仓储与管理接口、真实 IdP 成员同步与角色编辑、服务端审计写入、文档上传与解析轮询、SSE 对话接口、模型配置 UI 的服务端部分、MCP/CLI。
+未实现：服务端模型配置与加密密钥、文档上传与 RAGFlow 解析轮询、SSE 对话接口、Agent Runtime 工具、本地成员/组编辑与密码重置、审计查询 API 与审计页接真、生产硬化、MCP/CLI、多租户 SaaS。
 
 登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；模型配置在 `components/model-config`，通过左下角账号菜单打开。
 
-管理端页面在 `apps/web/app/(admin)`，使用 `components/admin` 下的 mock 数据上下文；不要把 UI 的可用人数或访问检查当成真实授权结果。
+管理端页面在 `apps/web/app/(admin)`：`knowledge` 与 `permissions` 已接真实 API；`members` 与 `audit` 仍是 mock，不要把这两页的可用人数或访问检查当成真实授权结果。
 
-`pnpm test` 目前只覆盖 ACL 纯策略，不是完整测试覆盖；不要用健康检查通过来推断业务链路可用。
+`pnpm test` 目前覆盖 ACL 纯策略与 API/跨租户集成，共 26 个测试，但不是完整端到端覆盖；不要用健康检查通过来推断业务链路可用。

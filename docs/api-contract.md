@@ -1,7 +1,8 @@
 # PiChat 第一冲刺 API 契约
 
-> 状态：已冻结，2026-10-21。变更前必须先征得用户同意，并同步修改本文件与 `packages/shared/src/api.ts`。
+> 状态：已冻结并完成第一冲刺实现，2026-10-21。变更前必须先征得用户同意，并同步修改本文件与 `packages/shared/src/api.ts`。
 > 适用：任务 A（后端与数据）与任务 B（Web 接真）。两边的类型以 `@pichat/shared` 为准。
+> 实施说明：ACL 写权限已按 `tenant_admin` + `knowledge_admin` 实现；`knowledge_admin` / `security_admin` 可读取本租户全部文档元数据，但不因此获得内容读取权限。
 
 ## 0. 已确认决策
 
