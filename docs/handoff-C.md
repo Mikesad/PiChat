@@ -2,7 +2,7 @@
 
 > 分支：`feat/model-config-ingestion`
 > 基线：`master`（9766d06）
-> 代码提交：见本文件末尾「提交记录」（最终以 `git log` 为准）
+> 代码提交：`0e13658`
 > 日期：2026-10-21
 
 ## 1. 完成内容
@@ -112,7 +112,8 @@
 
 ## 7. 提交记录
 
-- 代码与文档提交：见推送后 `git log --oneline`（分支 `feat/model-config-ingestion`）。
+- 代码与文档提交：`0e13658`（`feat: add encrypted model config and document ingestion`）。
+- Handoff 补全提交：本文件更新后的提交，见分支 `feat/model-config-ingestion` 顶端。
 - 未合并 `master`，等待审核。
 
 
