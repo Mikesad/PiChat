@@ -1,6 +1,7 @@
 import {
   boolean,
   index,
+  int,
   json,
   mysqlEnum,
   mysqlTable,
@@ -30,6 +31,7 @@ export const users = mysqlTable(
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
     email: varchar("email", { length: 255 }).notNull(),
+    passwordHash: varchar("password_hash", { length: 255 }).notNull(),
     displayName: varchar("display_name", { length: 120 }).notNull(),
     role: mysqlEnum("role", ["member", "knowledge_admin", "security_admin", "tenant_admin"])
       .default("member")
@@ -41,6 +43,28 @@ export const users = mysqlTable(
   (table) => [
     uniqueIndex("users_tenant_email_uq").on(table.tenantId, table.email),
     index("users_tenant_idx").on(table.tenantId),
+  ],
+);
+
+export const authSessions = mysqlTable(
+  "auth_sessions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: varchar("tenant_id", { length: 36 })
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    lastUsedAt: timestamp("last_used_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("auth_sessions_token_uq").on(table.tokenHash),
+    index("auth_sessions_user_idx").on(table.userId),
+    index("auth_sessions_expires_idx").on(table.expiresAt),
   ],
 );
 
@@ -90,6 +114,7 @@ export const knowledgeBases = mysqlTable(
     description: text("description"),
     ragflowDatasetId: varchar("ragflow_dataset_id", { length: 64 }).notNull(),
     embeddingModel: varchar("embedding_model", { length: 120 }).notNull(),
+    aclVersion: int("acl_version").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
@@ -124,6 +149,32 @@ export const documents = mysqlTable(
     index("documents_tenant_kb_idx").on(table.tenantId, table.knowledgeBaseId),
     index("documents_ragflow_idx").on(table.ragflowDocumentId),
     index("documents_status_idx").on(table.status),
+  ],
+);
+
+export const knowledgeBaseAcls = mysqlTable(
+  "knowledge_base_acls",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: varchar("tenant_id", { length: 36 })
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    knowledgeBaseId: varchar("knowledge_base_id", { length: 36 })
+      .notNull()
+      .references(() => knowledgeBases.id, { onDelete: "cascade" }),
+    subjectType: mysqlEnum("subject_type", ["user", "group"]).notNull(),
+    subjectId: varchar("subject_id", { length: 36 }).notNull(),
+    permission: mysqlEnum("permission", ["read", "deny"]).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("knowledge_base_acls_uq").on(
+      table.knowledgeBaseId,
+      table.subjectType,
+      table.subjectId,
+    ),
+    index("knowledge_base_acls_tenant_idx").on(table.tenantId),
+    index("knowledge_base_acls_subject_idx").on(table.subjectType, table.subjectId),
   ],
 );
 
@@ -217,6 +268,9 @@ export const modelConfigs = mysqlTable(
     tenantId: varchar("tenant_id", { length: 36 })
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     provider: varchar("provider", { length: 60 }).notNull(),
     modelId: varchar("model_id", { length: 120 }).notNull(),
     displayName: varchar("display_name", { length: 120 }).notNull(),
@@ -227,14 +281,22 @@ export const modelConfigs = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => [
-    uniqueIndex("model_configs_tenant_model_uq").on(table.tenantId, table.provider, table.modelId),
+    uniqueIndex("model_configs_tenant_user_model_uq").on(
+      table.tenantId,
+      table.userId,
+      table.provider,
+      table.modelId,
+    ),
+    index("model_configs_user_idx").on(table.tenantId, table.userId),
   ],
 );
 
 export type Tenant = typeof tenants.$inferSelect;
 export type User = typeof users.$inferSelect;
+export type AuthSession = typeof authSessions.$inferSelect;
 export type Group = typeof groups.$inferSelect;
 export type KnowledgeBase = typeof knowledgeBases.$inferSelect;
+export type KnowledgeBaseAcl = typeof knowledgeBaseAcls.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type DocumentAcl = typeof documentAcls.$inferSelect;
 export type AgentSession = typeof agentSessions.$inferSelect;
