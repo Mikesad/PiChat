@@ -1,6 +1,6 @@
 # PiChat 第一冲刺 API 契约
 
-> 状态：已冻结并完成第一冲刺实现，2026-10-21。变更前必须先征得用户同意，并同步修改本文件与 `packages/shared/src/api.ts`。
+> 状态：第一冲刺契约已冻结；任务 C/D/E 在末尾追加新接口，2026-10-22。变更前必须先征得用户同意，并同步修改本文件与 `packages/shared/src/api.ts`。
 > 适用：任务 A（后端与数据）与任务 B（Web 接真）。两边的类型以 `@pichat/shared` 为准。
 > 实施说明：ACL 写权限已按 `tenant_admin` + `knowledge_admin` 实现；`knowledge_admin` / `security_admin` 可读取本租户全部文档元数据，但不因此获得内容读取权限。
 
@@ -426,3 +426,177 @@ API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；
   - 重置 `status=pending`、清空 `errorMessage` 并入队；权限与租户校验同上。
 
 `DocumentSummary` 在原有字段基础上增加 `mimeType`、`errorMessage`，`sizeLabel` 来自 `size_bytes`。
+
+## 13. 任务 D 新增接口（2026-10-22）
+
+### 13.1 对话会话与消息
+
+所有接口要求登录；`tenantId`、`userId` 只来自 session。跨租户或他人会话返回 `404 not_found`。
+
+- `GET /api/chat/sessions` → `{ sessions: ChatSessionSummary[] }`
+- `POST /api/chat/sessions` → `201 { session: ChatSessionSummary }`
+  - body：`{ title?, modelConfigId? }`；`title` 缺省为“新对话”。
+  - `modelConfigId` 可选；实际模型在发送消息时解析。
+- `GET /api/chat/sessions/:id/messages` → `{ session, messages: ChatMessageSummary[] }`
+  - 只返回 `user` / `assistant`；`messages.metadata` 保存 thinking、tools、citations、usage、runStatus。
+- `POST /api/chat/sessions/:id/messages` → `text/event-stream`
+  - body：`{ content, modelConfigId?, thinkingLevel?, retry? }`
+  - 未配置模型：`409 conflict`。
+  - 同一会话同时只允许一个 run：`409 conflict`。
+  - `retry=true` 时重试最后一条失败回答，不重复插入 user message；最后一条不是失败回答时返回 `409`。
+- `POST /api/chat/runs/:runId/abort` → `204`
+  - 只能中止当前用户自己的 run；不存在或不属于当前用户返回 `404`。
+
+`ChatSessionSummary`：
+
+```ts
+{
+  id: string;
+  title: string;
+  modelProvider: string;
+  modelId: string;
+  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+`ChatMessageSummary`：
+
+```ts
+{
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  metadata: {
+    runId?: string;
+    status?: "completed" | "aborted" | "error";
+    model?: { provider: string; modelId: string; displayName: string };
+    thinkingLevel?: string;
+    thinking?: string;
+    tools?: Array<{ id; name; label; description; status; durationMs? }>;
+    citations?: ChatCitation[];
+    usage?: { inputTokens; outputTokens; cacheReadTokens; cacheWriteTokens; totalTokens };
+    error?: { code: string; message: string; retryable?: boolean };
+  } | null;
+}
+```
+
+### 13.2 SSE 事件
+
+事件复用 `packages/shared/src/sse.ts`，`event:` 为类型，`data:` 为 JSON；每个事件带 `${runId}:${seq}` 形式的 `id`。
+
+| 事件 | data |
+| --- | --- |
+| `run.start` | `{ runId, sessionId, assistantMessageId, model }` |
+| `message.start` | `{ messageId }` |
+| `text.delta` | `{ delta }` |
+| `thinking.delta` | `{ delta }` |
+| `tool.start` | `{ toolCallId, toolName, label, description }` |
+| `tool.end` | `{ toolCallId, toolName, status: "ok"\|"error", durationMs?, description? }` |
+| `citation.add` | `ChatCitation` |
+| `usage` | `ChatUsage` |
+| `compaction` | `{ phase: "start"\|"end", reason }` |
+| `run.end` | 最终快照：`runId/sessionId/assistantMessageId/status/content/thinking/tools/citations/usage/finishReason?/error?` |
+| `error` | `{ code, message, retryable? }` |
+
+`run.end` 的 `status` 为 `completed`、`aborted` 或 `error`。业务 API 以 `run.end` 快照写 MySQL；流中断时用已累积的增量事件兜底。
+
+### 13.3 Runtime 内部接口
+
+以下接口只允许内网调用，使用 `Authorization: Bearer <INTERNAL_SHARED_SECRET>`；不得通过 Web BFF 暴露。
+
+- `POST /internal/chat/run` → `text/event-stream`
+  - body：`ChatRunRequest`（runId、sessionId、assistantMessageId、principal、model、thinkingLevel、history、prompt）。
+  - 同一 `runId` 或同一 `sessionId` 的并发 run 返回 `409`。
+- `POST /internal/chat/runs/:runId/abort` → `204`
+- `POST /internal/access/scope`
+  - body：`{ principal, knowledgeBaseIds? }`
+  - 只返回 `ready` 且有 `ragflowDocumentId` 的可读文档。
+- `POST /internal/access/check`
+  - body：`{ principal, documentId }` → `{ allowed, reason }`
+
+### 13.4 存储边界
+
+- Runtime：`AGENT_RUNTIME_DATA_DIR/<tenantId>/<userId>/<sessionId>/pi-sessions/*.jsonl` 保存 Pi 会话；`workspace/` 是隔离空目录。
+- 业务 API：MySQL `messages` 保存产品消息；API 不读 JSONL。
+- Runtime 不写 `messages`；API 不写 JSONL。
+- 模型 API Key 只在单次 run 的内存和临时 auth 目录中存在，run 结束删除；不得进入响应、日志、SSE 或仓库。
+
+## 14. 任务 E 新增接口（2026-10-22）
+
+### 14.1 `POST /api/knowledge-bases`
+
+仅 `tenant_admin`、`knowledge_admin` 可调用。
+
+请求：
+
+```json
+{
+  "name": "售后知识库",
+  "description": "客服与售后规范",
+  "embeddingModel": "BAAI/bge-large-zh-v1.5@SILICONFLOW"
+}
+```
+
+- `name`：trim 后 1–160 字符，在本租户内唯一（软删除的知识库仍占用名称，重复返回 `409 conflict`）。
+- `description`：可选，最长 4000 字符。
+- `embeddingModel`：可选；缺省使用服务端 `RAGFLOW_DEFAULT_EMBEDDING_MODEL`。两者都缺失时返回 `503 service_unavailable`。
+- 创建为**同步**：API 先调用 RAGFlow `createDataset`（数据集名 `pichat-<knowledgeBaseId>`，便于追溯），成功后才写 MySQL 并返回 `201 { knowledgeBase: KnowledgeBaseSummary }`。
+- RAGFlow 不可用或拒绝创建：`503 service_unavailable`，不写 MySQL 半成品；若 MySQL 最终写入失败，API 会尽力删除刚创建的 RAGFlow dataset。
+- 审计：`action = knowledge_base.create`，`resourceType = knowledge_base`，metadata 记录名称、dataset id、embedding model。
+
+### 14.2 `DELETE /api/knowledge-bases/:id`
+
+仅 `tenant_admin`、`knowledge_admin` 可调用；跨租户或不存在返回 `404 not_found`。
+
+- 成功 `204`，无响应体。
+- 语义为**软删除**：写 `knowledge_bases.deleted_at`，同一事务内把未删除文档置为 `deleted` 并写 `deleted_at`、删除知识库默认 ACL 与文档 ACL、递增 `acl_version`。
+- 事务后取消该知识库下文档的 BullMQ 任务、删除 `UPLOAD_DIR/<tenantId>/<knowledgeBaseId>`、尝试删除 RAGFlow dataset。
+- RAGFlow 或本地清理失败不回滚 DB，也不改变 `204`；审计 metadata 记录 `localCleanup`、`remoteCleanup`、错误摘要。
+- 重复删除幂等：已软删除返回 `204`，不重复写审计。
+- 删除后知识库、文档、ACL、内部检索 scope 均不可见。
+- 审计：`action = knowledge_base.delete`。
+
+### 14.3 `DELETE /api/documents/:id`
+
+仅 `tenant_admin`、`knowledge_admin` 可调用；跨租户或不存在返回 `404 not_found`。
+
+- 成功 `204`，无响应体。
+- 软删除文档：`deleted_at` + `status = "deleted"`，删除该文档的 `document_acls`，递增所属知识库 `acl_version` 并清进程内 ACL 缓存。
+- 取消 `ingest-<documentId>` 队列任务；删除 `UPLOAD_DIR/<tenantId>/<knowledgeBaseId>/<documentId>`（校验路径在 `UPLOAD_DIR` 内）。
+- 若存在 `ragflow_document_id`，尝试从 RAGFlow 删除；404 视为幂等成功，其他失败记录审计。
+- 重复删除幂等；本地/远端清理失败不回滚 DB。
+- 审计：`action = document.delete`，metadata 记录文件、dataset、`aclVersion`、清理结果。
+
+### 14.4 `PUT /api/knowledge-bases/:id/documents/acl`
+
+仅 `tenant_admin`、`knowledge_admin` 可调用。一次只能操作一个知识库。
+
+请求：
+
+```json
+{
+  "documentIds": ["doc-1", "doc-2"],
+  "exceptions": [{ "type": "group", "id": "g-support", "permission": "read" }],
+  "mode": "replace"
+}
+```
+
+规则：
+
+- `documentIds`：1–200，去重；必须全部属于该知识库、当前租户且未删除，否则 `400 invalid_request`。
+- `exceptions`：最多 200；重复 subject 返回 `400`；`type/id` 必须属于当前租户，否则 `400`。
+- 本轮只支持 `mode = "replace"`（可省略）。语义是**整体替换**这些文档的文档例外，不是追加；每篇文档写入相同的 exceptions。
+- 事务内删除这些文档的旧 `document_acls`、插入新例外、知识库 `acl_version` 只递增一次；随后清 ACL 缓存。
+- 审计：`action = document.acl.batch_update`，`resourceType = knowledge_base`，`resourceId = knowledgeBaseId`，metadata 记录 `documentIds`、变更前后摘要、`aclVersion`。
+- 成功 `200 { aclVersion, documents: DocumentSummary[] }`，`documents` 按请求中的 `documentIds` 顺序返回。
+- 跨租户知识库 `404`；角色不足 `403`。
+
+### 14.5 队列与 Worker 语义
+
+- 任务 jobId 固定为 `ingest-<documentId>`（BullMQ 不允许 jobId 含冒号），入队前尝试移除同 ID 的旧任务；完成的任务立即移除，失败任务最多保留 1000 个。
+- 删除接口在 Redis 不可用时仍完成 DB 软删除；日志记录取消失败，Worker 通过 DB 的 `deleted_at` / `status=deleted` 再次确认并跳过。
+- Worker 在写 RAGFlow、更新文档状态前使用条件更新；若文档在入库过程中被删除，会尽力删除已上传的 RAGFlow 文档并返回 `skipped`。
+- Worker 找不到知识库（含软删除）时跳过，不再把文档标记为失败后继续上传。

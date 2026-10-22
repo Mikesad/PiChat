@@ -1,10 +1,10 @@
 # Tools
 
-Planned Pi tools:
+Implemented Pi tools:
 
-- `kb.search`: retrieve chunks from allowed documents.
-- `kb.read`: read a permitted document range.
-- `web.search`: optional external search.
-- `cli.exec`: sandboxed command execution, disabled by default.
+- `kb_search`: retrieve chunks from allowed documents.
+- `kb_read`: read more chunks from a document referenced by a `kb_search` citation index.
 
-All tools receive the authenticated principal from the runtime, never from model input.
+Both tools receive the authenticated principal from the runtime, never from model input. Authorization is computed by the business API via `/internal/access/*`; `document_ids` sent to RAGFlow are derived server-side.
+
+Disabled: built-in `read`, `write`, `edit`, `bash`; `web.search` and `cli.exec` are not implemented.

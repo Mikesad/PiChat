@@ -1,6 +1,24 @@
 import "@fastify/multipart";
-import { Body, Controller, Get, Inject, Param, Post, Put, Req, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Param,
+  Post,
+  Put,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import type {
+  AclException,
+  BatchUpdateDocumentAclRequest,
+  BatchUpdateDocumentAclResponse,
+  CreateKnowledgeBaseRequest,
+  CreateKnowledgeBaseResponse,
   KnowledgeBaseListResponse,
   KnowledgeBaseResponse,
   SessionUser,
@@ -26,6 +44,24 @@ const updateKnowledgeBaseAclSchema = z.object({
   defaultSubjects: z.array(aclSubjectSchema).max(200),
 });
 
+const createKnowledgeBaseSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4000).optional(),
+  embeddingModel: z.string().trim().max(120).optional(),
+});
+
+const aclExceptionSchema = z.object({
+  type: z.enum(["user", "group"]),
+  id: z.string().min(1).max(36),
+  permission: z.enum(["read", "deny"]),
+});
+
+const batchUpdateDocumentAclSchema = z.object({
+  documentIds: z.array(z.string().min(1).max(36)).min(1).max(200),
+  exceptions: z.array(aclExceptionSchema).max(200),
+  mode: z.literal("replace").optional(),
+});
+
 @Controller("knowledge-bases")
 @UseGuards(SessionGuard)
 export class KnowledgeBasesController {
@@ -37,6 +73,15 @@ export class KnowledgeBasesController {
   @Get()
   async list(@CurrentUser() user: SessionUser): Promise<KnowledgeBaseListResponse> {
     return { knowledgeBases: await this.knowledgeBasesService.list(user) };
+  }
+
+  @Post()
+  async create(
+    @Body() body: unknown,
+    @CurrentUser() user: SessionUser,
+  ): Promise<CreateKnowledgeBaseResponse> {
+    const input = parseBody<CreateKnowledgeBaseRequest>(createKnowledgeBaseSchema, body);
+    return { knowledgeBase: await this.knowledgeBasesService.create(user, input) };
   }
 
   @Get(":id/documents")
@@ -88,6 +133,27 @@ export class KnowledgeBasesController {
     @CurrentUser() user: SessionUser,
   ): Promise<KnowledgeBaseResponse> {
     return { knowledgeBase: await this.knowledgeBasesService.get(id, user) };
+  }
+
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@Param("id") id: string, @CurrentUser() user: SessionUser): Promise<void> {
+    await this.knowledgeBasesService.delete(user, id);
+  }
+
+  @Put(":id/documents/acl")
+  async updateDocumentsAcl(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @CurrentUser() user: SessionUser,
+  ): Promise<BatchUpdateDocumentAclResponse> {
+    const input = parseBody<BatchUpdateDocumentAclRequest>(batchUpdateDocumentAclSchema, body);
+    return this.knowledgeBasesService.updateDocumentsAcl(
+      user,
+      id,
+      input.documentIds,
+      input.exceptions as AclException[],
+    );
   }
 
   @Put(":id/acl")

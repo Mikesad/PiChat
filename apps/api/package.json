@@ -20,6 +20,7 @@
     "@pichat/access-control": "workspace:^",
     "@pichat/db": "workspace:^",
     "@pichat/queue": "workspace:^",
+    "@pichat/ragflow-client": "workspace:*",
     "@pichat/shared": "workspace:*",
     "bullmq": "^6.3.18",
     "drizzle-orm": "^0.45.4",

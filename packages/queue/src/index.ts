@@ -6,6 +6,10 @@ export interface IngestionJob {
   knowledgeBaseId: string;
 }
 
+export function ingestionJobId(documentId: string): string {
+  return `ingest-${documentId}`;
+}
+
 export type IngestionStatus = "ready" | "failed" | "skipped";
 
 export interface IngestionResult {
@@ -94,6 +98,6 @@ export function createWorkerRedisOptions(redisUrl: string): WorkerRedisOptions {
 
 export const INGESTION_JOB_OPTIONS = {
   attempts: 1,
-  removeOnComplete: 100,
-  removeOnFail: 100,
+  removeOnComplete: true,
+  removeOnFail: 1_000,
 } as const;

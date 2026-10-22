@@ -2,28 +2,32 @@
 
 import { useState } from "react";
 import { type AclSubject, subjectKey, subjectName } from "@/lib/admin-data";
+import { apiErrorMessage } from "@/lib/api-client";
 import { Icon } from "../icons";
 import { SubjectSelect } from "./acl";
+import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
-import { useNotImplemented } from "./not-implemented";
-import { Button, FormField, InfoBanner, inputClass, selectClass, textareaClass } from "./ui";
+import { useToast } from "./toast";
+import { Button, FormField, InfoBanner, inputClass, textareaClass } from "./ui";
 
-const embeddingOptions = [
-  "bge-m3 · 1024 维",
-  "text-embedding-3-large · 3072 维",
-  "qwen3-embedding-0.6b · 1024 维",
-];
-
-export function CreateKnowledgeDrawer({ onClose }: { onClose: () => void }) {
-  const notifyNotImplemented = useNotImplemented();
+export function CreateKnowledgeDrawer({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (knowledgeBaseId: string) => void;
+}) {
+  const { createKnowledgeBase, setDefaultSubjects: saveDefaultSubjects } = useAdminData();
+  const { showToast } = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [embeddingModel, setEmbeddingModel] = useState(embeddingOptions[0] ?? "");
-  const [dataset, setDataset] = useState("");
+  const [embeddingModel, setEmbeddingModel] = useState("");
   const [defaultSubjects, setDefaultSubjects] = useState<AclSubject[]>([]);
   const [subjectValue, setSubjectValue] = useState("");
   const [subjectError, setSubjectError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<{ name?: string; dataset?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string }>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   function parseSubject(value: string): AclSubject | null {
     const [type, id] = value.split(":");
@@ -48,20 +52,40 @@ export function CreateKnowledgeDrawer({ onClose }: { onClose: () => void }) {
     setSubjectError(null);
   }
 
-  function handleCreate() {
-    const nextErrors: { name?: string; dataset?: string } = {};
+  async function handleCreate() {
+    const nextErrors: { name?: string } = {};
     if (name.trim().length < 2) {
       nextErrors.name = "请输入至少 2 个字符的知识库名称";
-    }
-    if (dataset.trim().length === 0) {
-      nextErrors.dataset = "请填写 RAGFlow 数据集 ID";
     }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
     }
 
-    notifyNotImplemented("新建知识库");
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const knowledgeBase = await createKnowledgeBase({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        embeddingModel: embeddingModel.trim() || undefined,
+      });
+
+      if (defaultSubjects.length > 0) {
+        try {
+          await saveDefaultSubjects(knowledgeBase.id, defaultSubjects);
+        } catch (cause) {
+          showToast(`知识库已创建，但默认访问范围保存失败：${apiErrorMessage(cause)}`, "danger");
+        }
+      }
+
+      showToast("知识库已创建，RAGFlow 数据集已就绪");
+      onCreated(knowledgeBase.id);
+    } catch (cause) {
+      setSubmitError(apiErrorMessage(cause));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -72,10 +96,12 @@ export function CreateKnowledgeDrawer({ onClose }: { onClose: () => void }) {
       description="创建后可以继续上传文档并调整默认访问范围"
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
             取消
           </Button>
-          <Button onClick={handleCreate}>创建知识库</Button>
+          <Button onClick={() => void handleCreate()} disabled={submitting}>
+            {submitting ? "创建中…" : "创建知识库"}
+          </Button>
         </div>
       }
     >
@@ -113,43 +139,26 @@ export function CreateKnowledgeDrawer({ onClose }: { onClose: () => void }) {
         <FormField
           id="kb-embedding"
           label="Embedding 模型"
-          required
-          hint="每个知识库固定一个模型和维度；更换模型需要重建索引。"
+          hint="留空使用服务端默认模型（RAGFLOW_DEFAULT_EMBEDDING_MODEL）。每个知识库固定一个模型和维度，创建后不可更改。"
         >
-          <select
+          <input
             id="kb-embedding"
             value={embeddingModel}
             onChange={(event) => setEmbeddingModel(event.target.value)}
-            className={selectClass}
-          >
-            {embeddingOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </FormField>
-
-        <FormField
-          id="kb-dataset"
-          label="RAGFlow 数据集 ID"
-          required
-          error={errors.dataset}
-          hint="只绑定已有数据集，API Key 由服务端保存。"
-        >
-          <input
-            id="kb-dataset"
-            value={dataset}
-            onChange={(event) => {
-              setDataset(event.target.value);
-              setErrors((previous) => ({ ...previous, dataset: undefined }));
-            }}
-            placeholder="例如：ragflow_support_2026"
-            aria-invalid={errors.dataset ? true : undefined}
-            aria-describedby={errors.dataset ? "kb-dataset-error" : "kb-dataset-hint"}
+            placeholder="例如：BAAI/bge-large-zh-v1.5@SILICONFLOW"
             className={`${inputClass} font-mono`}
           />
         </FormField>
+
+        <InfoBanner tone="neutral" icon="database" title="RAGFlow 数据集由服务端创建">
+          RAGFlow API Key 只保存在服务端。创建失败时不会写入半成品知识库，可直接重试。
+        </InfoBanner>
+
+        {submitError ? (
+          <InfoBanner tone="danger" icon="alert-circle" title="创建失败">
+            {submitError}
+          </InfoBanner>
+        ) : null}
 
         <InfoBanner tone="warning" icon="alert-circle" title="创建后锁定">
           Embedding 模型创建后不可更改。更换模型需要新建知识库并重新解析全部文档。

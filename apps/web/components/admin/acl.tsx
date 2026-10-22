@@ -23,7 +23,6 @@ import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
-import { useNotImplemented } from "./not-implemented";
 import { useToast } from "./toast";
 import { Badge, Button, InfoBanner, StatusBadge, selectClass } from "./ui";
 import { useApiErrorHandler } from "./use-api-error";
@@ -467,68 +466,186 @@ function AccessCheckResult({
   );
 }
 
-export function BulkAclDialog({
+export function BulkAclDrawer({
+  knowledgeBaseId,
   documentIds,
-  initialPermission,
   onClose,
+  onApplied,
 }: {
+  knowledgeBaseId: string;
   documentIds: string[];
-  initialPermission: AclPermission;
   onClose: () => void;
+  onApplied?: () => void;
 }) {
-  const { knowledgeBases } = useAdminData();
-  const notifyNotImplemented = useNotImplemented();
-  const [subjectValue, setSubjectValue] = useState("");
-  const [permission, setPermission] = useState<AclPermission>(initialPermission);
-  const [error, setError] = useState<string | null>(null);
-
+  const { knowledgeBases, setBatchDocumentExceptions } = useAdminData();
+  const { showToast } = useToast();
+  const handleApiError = useApiErrorHandler();
   const targets = documentIds.flatMap((documentId) => {
     const found = findDocument(knowledgeBases, documentId);
-    return found ? [found] : [];
+    return found && found.knowledgeBase.id === knowledgeBaseId ? [found] : [];
   });
-  const subject = parseSubject(subjectValue);
+  const sharedSignature =
+    targets.length > 0 ? exceptionSignature(targets[0]?.document.exceptions ?? []) : "";
+  const hasSharedExceptions =
+    targets.length > 0 &&
+    targets.every((target) => exceptionSignature(target.document.exceptions) === sharedSignature);
+  const knowledgeBase = targets[0]?.knowledgeBase;
 
-  function handleApply() {
-    if (!subject) {
+  const [exceptions, setExceptions] = useState<AclException[]>(() =>
+    hasSharedExceptions ? (targets[0]?.document.exceptions ?? []) : [],
+  );
+  const [subjectValue, setSubjectValue] = useState("");
+  const [permission, setPermission] = useState<AclPermission>("read");
+  const [error, setError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const pendingSubject = parseSubject(subjectValue);
+  const denyCount = exceptions.filter((exception) => exception.permission === "deny").length;
+  const existingExceptionCount = targets.reduce(
+    (sum, target) => sum + target.document.exceptions.length,
+    0,
+  );
+
+  function handleAdd() {
+    if (!pendingSubject) {
       setError("请选择用户或用户组");
       return;
     }
-    notifyNotImplemented("批量授权");
+    setExceptions((previous) => mergeException(previous, { ...pendingSubject, permission }));
+    setSubjectValue("");
+    setError(null);
+  }
+
+  async function handleApply() {
+    if (targets.length !== documentIds.length || !knowledgeBase) {
+      setSubmitError("选中的文档必须属于同一个知识库，请重新选择");
+      return;
+    }
+
+    setSaving(true);
+    setSubmitError(null);
+    try {
+      await setBatchDocumentExceptions(knowledgeBaseId, documentIds, exceptions);
+      showToast(`已更新 ${documentIds.length} 篇文档的权限，下一次提问生效`);
+      onApplied?.();
+      onClose();
+    } catch (cause) {
+      setSubmitError(apiErrorMessage(cause));
+      await handleApiError(cause);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <Drawer
       open
       onClose={onClose}
+      width="lg"
       title="批量设置文档权限"
-      description={`将应用到选中的 ${targets.length} 篇文档`}
+      description={`将整体替换选中的 ${documentIds.length} 篇文档的例外规则`}
       footer={
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            取消
-          </Button>
-          <Button variant={permission === "deny" ? "danger" : "primary"} onClick={handleApply}>
-            应用更改
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-subtle">
+            {exceptions.length} 条例外 · {denyCount} 条拒绝
+          </p>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={saving}>
+              取消
+            </Button>
+            <Button
+              variant={denyCount > 0 ? "danger" : "primary"}
+              onClick={() => void handleApply()}
+              disabled={saving || targets.length === 0}
+            >
+              {saving ? "保存中…" : `应用到 ${documentIds.length} 篇`}
+            </Button>
+          </div>
         </div>
       }
     >
       <div className="rounded-xl border border-border bg-surface-2/60 p-3">
         <p className="text-xs font-medium text-fg">选中的文档</p>
         <ul className="mt-1.5 space-y-1 text-xs text-muted">
-          {targets.slice(0, 3).map((target) => (
+          {targets.slice(0, 4).map((target) => (
             <li key={target.document.id} className="truncate">
               · {target.document.title}
             </li>
           ))}
-          {targets.length > 3 ? <li>等 {targets.length} 篇文档</li> : null}
+          {targets.length > 4 ? <li>等 {targets.length} 篇文档</li> : null}
         </ul>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <div>
-          <p className="text-xs font-medium text-fg">应用对象</p>
-          <div className="mt-1.5">
+      {existingExceptionCount > 0 ? (
+        <div className="mt-3">
+          <InfoBanner tone="warning" icon="alert-circle" title="整体替换，不是追加">
+            这些文档当前共有 {existingExceptionCount} 条例外
+            {hasSharedExceptions ? "（规则相同，已载入草稿）" : "（规则不一致，草稿从空开始）"}。
+            保存后每篇文档只保留下方草稿中的规则；知识库默认访问范围不受影响。
+          </InfoBanner>
+        </div>
+      ) : (
+        <div className="mt-3">
+          <InfoBanner tone="neutral" icon="info" title="批量例外">
+            选中的文档当前没有文档例外。保存后将为每篇文档写入相同的例外规则。
+          </InfoBanner>
+        </div>
+      )}
+
+      <section className="mt-5">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-medium text-fg">批量例外草稿</h3>
+          <Badge tone={denyCount > 0 ? "danger" : "outline"}>{exceptions.length} 条</Badge>
+        </div>
+        {exceptions.length === 0 ? (
+          <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-subtle">
+            草稿为空。保存会清空这些文档的全部文档例外，仅保留知识库默认范围。
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {exceptions.map((exception) => (
+              <li
+                key={subjectKey(exception)}
+                className={cn(
+                  "flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2",
+                  exception.permission === "deny"
+                    ? "border-danger/30 bg-danger-soft/60"
+                    : "border-border bg-surface",
+                )}
+              >
+                <Icon
+                  name={exception.type === "group" ? "users" : "user"}
+                  size={14}
+                  className={cn(
+                    "shrink-0",
+                    exception.permission === "deny" ? "text-danger" : "text-subtle",
+                  )}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm text-fg">
+                  {subjectName(exception)}
+                </span>
+                <span className="shrink-0 text-[11px] text-subtle">
+                  {subjectMemberCount(exception)} 人
+                </span>
+                <Badge tone={exception.permission === "deny" ? "danger" : "success"}>
+                  {exception.permission === "deny" ? "拒绝" : "读取"}
+                </Badge>
+                <button
+                  type="button"
+                  onClick={() => setExceptions((previous) => removeException(previous, exception))}
+                  aria-label={`移除 ${subjectName(exception)} 的批量例外`}
+                  className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-2 hover:text-danger"
+                >
+                  <Icon name="trash" size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="mt-3 rounded-xl border border-border bg-surface-2/50 p-3">
+          <p className="text-xs font-medium text-fg">添加例外</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
             <SubjectSelect
               value={subjectValue}
               onChange={(value) => {
@@ -537,33 +654,47 @@ export function BulkAclDialog({
               }}
               label="选择要批量授权的用户或用户组"
             />
-          </div>
-        </div>
-        <div>
-          <p className="text-xs font-medium text-fg">权限</p>
-          <div className="mt-1.5">
             <PermissionSelect value={permission} onChange={setPermission} label="选择批量权限" />
+            <Button onClick={handleAdd} className="justify-center">
+              <Icon name="plus" size={14} />
+              添加
+            </Button>
           </div>
+          {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
+          <p className="mt-1 text-[11px] leading-5 text-subtle">
+            同一主体只能保留一条例外；拒绝优先于读取，保存后下一次提问立即生效。
+          </p>
         </div>
-        {error ? <p className="text-xs text-danger">{error}</p> : null}
-      </div>
+      </section>
+
+      {submitError ? (
+        <div className="mt-4">
+          <InfoBanner tone="danger" icon="alert-circle" title="批量授权失败">
+            {submitError}
+          </InfoBanner>
+        </div>
+      ) : null}
 
       <div className="mt-4">
         <InfoBanner
-          tone={permission === "deny" ? "danger" : "warning"}
-          icon={permission === "deny" ? "ban" : "users"}
-          title={permission === "deny" ? "拒绝优先于读取" : "权限变更提示"}
+          tone={denyCount > 0 ? "danger" : "warning"}
+          icon="shield-check"
+          title="确认影响范围"
         >
-          {subject
-            ? `将影响约 ${subjectMemberCount(subject)} 人，覆盖 ${targets.length} 篇文档。`
-            : `将影响 ${targets.length} 篇文档。`}
-          {permission === "deny"
-            ? " 被拒绝的主体即使通过知识库默认或其他用户组获得读取权限，也将无法访问。"
-            : " 已有相同主体例外会被替换，不会产生重复规则。"}
+          {pendingSubject
+            ? `新添加的主体约影响 ${subjectMemberCount(pendingSubject)} 人。`
+            : `本次将覆盖 ${documentIds.length} 篇文档。`}
+          {knowledgeBase ? ` 知识库「${knowledgeBase.name}」的默认访问范围继续生效。` : ""}
         </InfoBanner>
       </div>
-
-      <p className="mt-3 text-[11px] text-subtle">保存后权限将在下一次提问时生效。</p>
     </Drawer>
+  );
+}
+
+function exceptionSignature(exceptions: AclException[]): string {
+  return JSON.stringify(
+    [...exceptions]
+      .sort((left, right) => subjectKey(left).localeCompare(subjectKey(right)))
+      .map((exception) => [subjectKey(exception), exception.permission]),
   );
 }

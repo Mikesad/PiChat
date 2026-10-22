@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { ConfigService } from "@nestjs/config";
 import {
+  auditLogs,
   createDatabase,
   type Database,
+  documentAcls,
   documents,
   knowledgeBases,
   tenants,
@@ -15,16 +17,18 @@ import {
 } from "@pichat/db";
 import type { IngestionJob } from "@pichat/queue";
 import type { SessionUser } from "@pichat/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AccessControlService } from "../access-control/access-control.service";
 import type { IngestionQueueService } from "../ingestion/ingestion-queue.service";
 import { DocumentsService } from "./documents.service";
+import type { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 
 const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip;
 
 class FakeQueue {
   jobs: IngestionJob[] = [];
+  cancelled: string[] = [];
   fail = false;
 
   async enqueue(job: IngestionJob): Promise<void> {
@@ -32,6 +36,10 @@ class FakeQueue {
       throw new Error("queue unavailable");
     }
     this.jobs.push(job);
+  }
+
+  async cancelDocument(documentId: string): Promise<void> {
+    this.cancelled.push(documentId);
   }
 }
 
@@ -63,6 +71,18 @@ describeWithDatabase("documents upload service", () => {
   let service: DocumentsService;
   let queue: FakeQueue;
   let uploadDirectory: string;
+  const remote = {
+    deleted: [] as Array<{ datasetId: string; documentId: string }>,
+    failDelete: false,
+    createDataset: async () => ({ id: "rf-test", name: "rf-test", embeddingModel: "bge-m3" }),
+    deleteDataset: async () => {},
+    deleteDocument: async (datasetId: string, documentId: string) => {
+      if (remote.failDelete) {
+        throw new Error("RAGFlow unavailable");
+      }
+      remote.deleted.push({ datasetId, documentId });
+    },
+  };
 
   beforeAll(async () => {
     db = createDatabase(process.env.DATABASE_URL as string);
@@ -85,6 +105,7 @@ describeWithDatabase("documents upload service", () => {
       config,
       accessControl,
       queue as unknown as IngestionQueueService,
+      remote as unknown as KnowledgeBaseRemoteService,
     );
 
     await db.insert(tenants).values([
@@ -227,6 +248,171 @@ describeWithDatabase("documents upload service", () => {
     expect(documentId).not.toBe("");
     expect(row?.status).toBe("failed");
     expect(row?.errorMessage).toContain("任务队列");
+  });
+
+  it("soft-deletes a document, clears ACLs, bumps the version, and removes local files", async () => {
+    const documentId = randomUUID();
+    const directory = join(uploadDirectory, tenantId, knowledgeBaseId, documentId);
+    await mkdir(directory, { recursive: true });
+    const sourceKey = join(directory, "delete-me.txt");
+    await writeFile(sourceKey, "hello");
+    await db.insert(documents).values({
+      id: documentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "delete-me.txt",
+      sourceKey,
+      status: "ready",
+      ragflowDocumentId: "rf-delete-me",
+    });
+    await db.insert(documentAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      documentId,
+      subjectType: "user",
+      subjectId: memberId,
+      permission: "deny",
+    });
+
+    await service.remove(admin, documentId);
+
+    const row = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.id, documentId))
+      .then((rows) => rows[0]);
+    expect(row?.status).toBe("deleted");
+    expect(row?.deletedAt).toBeInstanceOf(Date);
+    expect(
+      await db.select().from(documentAcls).where(eq(documentAcls.documentId, documentId)),
+    ).toHaveLength(0);
+    expect(existsSync(directory)).toBe(false);
+    expect(queue.cancelled).toContain(documentId);
+    expect(remote.deleted).toContainEqual({
+      datasetId: "ds-upload",
+      documentId: "rf-delete-me",
+    });
+
+    const version = await db
+      .select({ aclVersion: knowledgeBases.aclVersion })
+      .from(knowledgeBases)
+      .where(eq(knowledgeBases.id, knowledgeBaseId))
+      .then((rows) => rows[0]);
+    expect(version?.aclVersion).toBe(2);
+
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.action, "document.delete"),
+          eq(auditLogs.resourceId, documentId),
+        ),
+      );
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.metadata).toMatchObject({
+      remoteCleanup: "success",
+      localCleanup: "success",
+      aclVersion: 2,
+    });
+
+    await service.remove(admin, documentId);
+    expect(
+      await db
+        .select()
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.tenantId, tenantId),
+            eq(auditLogs.action, "document.delete"),
+            eq(auditLogs.resourceId, documentId),
+          ),
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("records remote cleanup failures without rolling back the soft delete", async () => {
+    const documentId = randomUUID();
+    const directory = join(uploadDirectory, tenantId, knowledgeBaseId, documentId);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "remote-fail.txt"), "hello");
+    await db.insert(documents).values({
+      id: documentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "remote-fail.txt",
+      sourceKey: join(directory, "remote-fail.txt"),
+      status: "ready",
+      ragflowDocumentId: "rf-remote-fail",
+    });
+
+    remote.failDelete = true;
+    try {
+      await expect(service.remove(admin, documentId)).resolves.toBeUndefined();
+    } finally {
+      remote.failDelete = false;
+    }
+
+    const row = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.id, documentId))
+      .then((rows) => rows[0]);
+    expect(row?.status).toBe("deleted");
+
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.action, "document.delete"),
+          eq(auditLogs.resourceId, documentId),
+        ),
+      );
+    expect(audit[0]?.metadata).toMatchObject({ remoteCleanup: "failed" });
+  });
+
+  it("rejects document deletion from members and across tenants", async () => {
+    const documentId = randomUUID();
+    await db.insert(documents).values({
+      id: documentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "guarded.txt",
+      sourceKey: join(uploadDirectory, "guarded.txt"),
+      status: "ready",
+    });
+
+    await expect(service.remove(member, documentId)).rejects.toMatchObject({
+      code: "forbidden",
+    });
+
+    const otherKnowledgeBaseId = randomUUID();
+    await db.insert(knowledgeBases).values({
+      id: otherKnowledgeBaseId,
+      tenantId: otherTenantId,
+      name: "Other Delete KB",
+      description: null,
+      ragflowDatasetId: "ds-other-delete",
+      embeddingModel: "bge-m3",
+      aclVersion: 1,
+    });
+    const foreignDocumentId = randomUUID();
+    await db.insert(documents).values({
+      id: foreignDocumentId,
+      tenantId: otherTenantId,
+      knowledgeBaseId: otherKnowledgeBaseId,
+      title: "foreign.txt",
+      sourceKey: join(uploadDirectory, "foreign.txt"),
+      status: "ready",
+    });
+
+    await expect(service.remove(admin, foreignDocumentId)).rejects.toMatchObject({
+      code: "not_found",
+    });
   });
 
   it("resets a failed document and requeues it on reparse", async () => {

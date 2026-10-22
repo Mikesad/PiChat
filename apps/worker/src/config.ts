@@ -10,9 +10,11 @@ export interface IngestionConfig {
 export interface IngestionClient {
   getDataset: RAGFlowClient["getDataset"];
   createDataset: RAGFlowClient["createDataset"];
+  deleteDataset: RAGFlowClient["deleteDataset"];
   uploadDocument: RAGFlowClient["uploadDocument"];
   parseDocuments: RAGFlowClient["parseDocuments"];
   getDocument: RAGFlowClient["getDocument"];
+  deleteDocument: RAGFlowClient["deleteDocument"];
 }
 
 function positiveNumber(value: string | undefined, fallback: number): number {

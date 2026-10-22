@@ -1,5 +1,6 @@
 "use client";
 
+import type { ThinkingLevel } from "@pichat/shared";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useToast } from "./admin/toast";
@@ -9,7 +10,7 @@ import { useModelConfig } from "./model-config/model-config-provider";
 interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (thinkingLevel: ThinkingLevel) => void;
   onStop: () => void;
   streaming: boolean;
   knowledgeBaseCount: number;
@@ -62,7 +63,7 @@ export function Composer({
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      onSend();
+      onSend(thinking as ThinkingLevel);
     }
   }
 
@@ -175,7 +176,7 @@ export function Composer({
               ) : (
                 <button
                   type="button"
-                  onClick={onSend}
+                  onClick={() => onSend(thinking as ThinkingLevel)}
                   disabled={!canSend}
                   aria-label="发送问题"
                   title="发送"

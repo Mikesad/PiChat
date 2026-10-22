@@ -2,12 +2,21 @@ import type {
   AccessCheckResponse,
   ApiErrorBody,
   ApiErrorCode,
+  BatchUpdateDocumentAclRequest,
+  BatchUpdateDocumentAclResponse,
+  ChatMessagesResponse,
+  ChatSessionListResponse,
+  ChatSessionResponse,
+  CreateChatSessionRequest,
+  CreateKnowledgeBaseRequest,
+  CreateKnowledgeBaseResponse,
   CreateModelConfigRequest,
   DocumentListResponse,
   KnowledgeBaseListResponse,
   ModelConfigListResponse,
   ModelConfigResponse,
   ReparseDocumentResponse,
+  SendChatMessageRequest,
   SessionResponse,
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
@@ -108,10 +117,36 @@ export function fetchKnowledgeBases() {
   return apiRequest<KnowledgeBaseListResponse>("/api/knowledge-bases");
 }
 
+export function createKnowledgeBase(input: CreateKnowledgeBaseRequest) {
+  return apiRequest<CreateKnowledgeBaseResponse>("/api/knowledge-bases", {
+    method: "POST",
+    body: jsonBody(input),
+  });
+}
+
+export function deleteKnowledgeBase(knowledgeBaseId: string) {
+  return apiRequest<void>(`/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchDocuments(knowledgeBaseId: string) {
   return apiRequest<DocumentListResponse>(
     `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
   );
+}
+
+export function updateDocumentsAcl(knowledgeBaseId: string, input: BatchUpdateDocumentAclRequest) {
+  return apiRequest<BatchUpdateDocumentAclResponse>(
+    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/acl`,
+    { method: "PUT", body: jsonBody(input) },
+  );
+}
+
+export function deleteDocument(documentId: string) {
+  return apiRequest<void>(`/api/documents/${encodeURIComponent(documentId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function updateDocumentAcl(documentId: string, input: UpdateDocumentAclRequest) {
@@ -180,6 +215,63 @@ export function reparseDocument(documentId: string) {
     `/api/documents/${encodeURIComponent(documentId)}/reparse`,
     { method: "POST" },
   );
+}
+
+export function fetchChatSessions() {
+  return apiRequest<ChatSessionListResponse>("/api/chat/sessions");
+}
+
+export function createChatSession(input: CreateChatSessionRequest = {}) {
+  return apiRequest<ChatSessionResponse>("/api/chat/sessions", {
+    method: "POST",
+    body: jsonBody(input),
+  });
+}
+
+export function fetchChatMessages(sessionId: string) {
+  return apiRequest<ChatMessagesResponse>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+  );
+}
+
+export async function streamChatMessage(
+  sessionId: string,
+  input: SendChatMessageRequest,
+  signal: AbortSignal,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      headers: {
+        accept: "text/event-stream",
+        "content-type": "application/json",
+      },
+      body: jsonBody(input),
+      cache: "no-store",
+      credentials: "same-origin",
+      signal,
+    });
+  } catch {
+    throw new ApiError("无法连接服务，请确认 API 已启动后重试。", 0);
+  }
+
+  if (response.ok) {
+    return response;
+  }
+
+  const text = await response.text();
+  const body = parseBody(text);
+  if (isApiErrorBody(body)) {
+    throw new ApiError(body.message, response.status, body.code);
+  }
+  throw new ApiError(text || `请求失败（${response.status}）`, response.status);
+}
+
+export function abortChatRun(runId: string) {
+  return apiRequest<void>(`/api/chat/runs/${encodeURIComponent(runId)}/abort`, {
+    method: "POST",
+  });
 }
 
 export function apiErrorMessage(error: unknown) {

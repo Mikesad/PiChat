@@ -24,6 +24,9 @@ class FakeRAGFlowClient implements IngestionClient {
   uploadCalls = 0;
   parseCalls = 0;
   createCalls = 0;
+  deletedDatasets: string[] = [];
+  deletedDocuments: string[] = [];
+  onUpload?: () => Promise<void>;
   private uploadSequence = 0;
 
   async getDataset(datasetId: string): Promise<RAGFlowDataset | null> {
@@ -39,11 +42,21 @@ class FakeRAGFlowClient implements IngestionClient {
     return { id, name: input.name, embeddingModel: input.embeddingModel };
   }
 
+  async deleteDataset(datasetId: string): Promise<void> {
+    this.deletedDatasets.push(datasetId);
+    this.existingDatasets.delete(datasetId);
+  }
+
+  async deleteDocument(_datasetId: string, documentId: string): Promise<void> {
+    this.deletedDocuments.push(documentId);
+  }
+
   async uploadDocument(_datasetId: string, _input: UploadDocumentInput): Promise<RAGFlowDocument> {
     this.uploadCalls += 1;
     this.uploadSequence += 1;
     const id = `rf-doc-${this.uploadSequence}`;
     this.states.set(id, ["parsing", "ready"]);
+    await this.onUpload?.();
     return {
       id,
       name: _input.fileName,
@@ -289,6 +302,76 @@ describeWithDatabase("worker ingestion", () => {
     expect(row?.status).toBe("failed");
     expect(row?.errorMessage).toContain("RAGFLOW_DEFAULT_EMBEDDING_MODEL");
     expect(client.createCalls).toBe(createCallsBefore);
+  });
+
+  it("skips documents whose knowledge base was soft-deleted", async () => {
+    const knowledgeBaseId = await createKnowledgeBase("ds-deleted-kb");
+    await db
+      .update(knowledgeBases)
+      .set({ deletedAt: new Date() })
+      .where(eq(knowledgeBases.id, knowledgeBaseId));
+    const document = await createDocument(knowledgeBaseId);
+
+    const uploadCallsBefore = client.uploadCalls;
+    const result = await runIngestion(
+      { tenantId, documentId: document.id, knowledgeBaseId },
+      deps(),
+    );
+
+    expect(result).toMatchObject({ status: "skipped", reason: "knowledge_base_not_found" });
+    expect(client.uploadCalls).toBe(uploadCallsBefore);
+  });
+
+  it("skips soft-deleted documents without touching RAGFlow", async () => {
+    client.existingDatasets.add("ds-deleted-doc");
+    const knowledgeBaseId = await createKnowledgeBase("ds-deleted-doc");
+    const document = await createDocument(knowledgeBaseId, {
+      status: "deleted",
+      deletedAt: new Date(),
+    });
+
+    const uploadCallsBefore = client.uploadCalls;
+    const result = await runIngestion(
+      { tenantId, documentId: document.id, knowledgeBaseId },
+      deps(),
+    );
+
+    expect(result).toMatchObject({ status: "skipped", reason: "document_not_found" });
+    expect(client.uploadCalls).toBe(uploadCallsBefore);
+  });
+
+  it("cleans up the remote document when it is deleted during upload", async () => {
+    client.existingDatasets.add("ds-delete-race");
+    const knowledgeBaseId = await createKnowledgeBase("ds-delete-race");
+    const document = await createDocument(knowledgeBaseId);
+    await writeFile(document.sourceKey, "hello", "utf8");
+
+    const uploadedBefore = client.uploadCalls;
+    client.onUpload = async () => {
+      await db
+        .update(documents)
+        .set({ status: "deleted", deletedAt: new Date() })
+        .where(eq(documents.id, document.id));
+    };
+
+    try {
+      const result = await runIngestion(
+        { tenantId, documentId: document.id, knowledgeBaseId },
+        deps(),
+      );
+      expect(result).toMatchObject({ status: "skipped", reason: "document_deleted" });
+      expect(client.uploadCalls).toBe(uploadedBefore + 1);
+      expect(client.deletedDocuments).toContain(`rf-doc-${uploadedBefore + 1}`);
+    } finally {
+      client.onUpload = undefined;
+    }
+
+    const row = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.id, document.id))
+      .then((rows) => rows[0]);
+    expect(row?.status).toBe("deleted");
   });
 
   it("fails without uploading when the local source file is missing", async () => {

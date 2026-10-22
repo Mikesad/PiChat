@@ -123,6 +123,13 @@ function AssistantMessage({
           </p>
         ) : null}
 
+        {message.status === "error" ? (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
+            <Icon name="alert-circle" size={13} />
+            {message.error ?? "生成失败，请重试。"}
+          </p>
+        ) : null}
+
         {message.citations && message.citations.length > 0 ? (
           <CitationsRow
             citations={message.citations}
@@ -173,13 +180,19 @@ function ToolCallList({ tools }: { tools: ToolCall[] }) {
               "flex size-6 shrink-0 items-center justify-center rounded-md",
               tool.status === "running"
                 ? "bg-accent-soft text-accent-text"
-                : "bg-success-soft text-success",
+                : tool.status === "error"
+                  ? "bg-danger-soft text-danger"
+                  : "bg-success-soft text-success",
             )}
           >
             {tool.status === "running" ? (
               <Spinner className="size-3" />
             ) : (
-              <Icon name="check" size={13} strokeWidth={2.25} />
+              <Icon
+                name={tool.status === "error" ? "alert-circle" : "check"}
+                size={13}
+                strokeWidth={2.25}
+              />
             )}
           </span>
           <span className="min-w-0 flex-1">
@@ -191,9 +204,11 @@ function ToolCallList({ tools }: { tools: ToolCall[] }) {
           <span className="shrink-0 text-[11px] tabular-nums text-subtle">
             {tool.status === "running"
               ? "运行中"
-              : tool.durationMs
-                ? `${tool.durationMs}ms`
-                : "完成"}
+              : tool.status === "error"
+                ? "失败"
+                : tool.durationMs
+                  ? `${tool.durationMs}ms`
+                  : "完成"}
           </span>
         </li>
       ))}

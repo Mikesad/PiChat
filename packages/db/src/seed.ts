@@ -108,6 +108,7 @@ async function seed() {
           aclVersion: 1,
           createdAt: new Date(knowledgeBase.createdAt),
           updatedAt: new Date(knowledgeBase.updatedAt),
+          deletedAt: null,
         })
         .onDuplicateKeyUpdate({
           set: {
@@ -117,6 +118,7 @@ async function seed() {
             embeddingModel: knowledgeBase.embeddingModel,
             aclVersion: 1,
             updatedAt: new Date(knowledgeBase.updatedAt),
+            deletedAt: null,
           },
         });
     }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ConfigService } from "@nestjs/config";
 import {
   auditLogs,
   createDatabase,
@@ -15,6 +16,8 @@ import type { SessionUser } from "@pichat/shared";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AccessControlService } from "../access-control/access-control.service";
+import type { IngestionQueueService } from "../ingestion/ingestion-queue.service";
+import type { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
 const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip;
@@ -67,10 +70,29 @@ describeWithDatabase("knowledge base ACL integration", () => {
   let accessControl: AccessControlService;
   let service: KnowledgeBasesService;
 
+  const remote = {
+    createDataset: async () => ({ id: "rf-test", name: "rf-test", embeddingModel: "bge-m3" }),
+    deleteDataset: async () => {},
+    deleteDocument: async () => {},
+  };
+  const queue = {
+    cancelDocument: async () => {},
+    cancelDocuments: async () => {},
+  };
+  const config = {
+    get: (key: string) => (key === "RAGFLOW_DEFAULT_EMBEDDING_MODEL" ? "bge-m3" : undefined),
+  } as unknown as ConfigService;
+
   beforeAll(async () => {
     db = createDatabase(process.env.DATABASE_URL as string);
     accessControl = new AccessControlService(db);
-    service = new KnowledgeBasesService(db, accessControl);
+    service = new KnowledgeBasesService(
+      db,
+      accessControl,
+      remote as unknown as KnowledgeBaseRemoteService,
+      queue as unknown as IngestionQueueService,
+      config,
+    );
 
     await db.insert(tenants).values({ id: tenantId, name: "ACL Test", slug: tenantId });
     await db.insert(users).values([

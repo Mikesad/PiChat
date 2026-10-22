@@ -1,6 +1,11 @@
 "use client";
 
-import type { DocumentSummary, KnowledgeBaseSummary } from "@pichat/shared";
+import type {
+  BatchUpdateDocumentAclResponse,
+  CreateKnowledgeBaseRequest,
+  DocumentSummary,
+  KnowledgeBaseSummary,
+} from "@pichat/shared";
 import {
   createContext,
   type ReactNode,
@@ -22,10 +27,14 @@ import {
 import {
   ApiError,
   apiErrorMessage,
+  createKnowledgeBase as createKnowledgeBaseRequest,
+  deleteDocument as deleteDocumentRequest,
+  deleteKnowledgeBase as deleteKnowledgeBaseRequest,
   fetchDocuments,
   fetchKnowledgeBases,
   reparseDocument as reparseDocumentRequest,
   updateDocumentAcl,
+  updateDocumentsAcl,
   updateKnowledgeBaseAcl,
 } from "@/lib/api-client";
 import { useAuth } from "../auth/auth-provider";
@@ -44,6 +53,17 @@ interface AdminDataContextValue {
     exceptions: AclException[],
   ) => Promise<void>;
   setDefaultSubjects: (knowledgeBaseId: string, subjects: AclSubject[]) => Promise<void>;
+  setBatchDocumentExceptions: (
+    knowledgeBaseId: string,
+    documentIds: string[],
+    exceptions: AclException[],
+  ) => Promise<BatchUpdateDocumentAclResponse>;
+  createKnowledgeBase: (input: CreateKnowledgeBaseRequest) => Promise<KnowledgeBaseSummary>;
+  deleteKnowledgeBase: (knowledgeBaseId: string) => Promise<void>;
+  deleteDocument: (documentId: string) => Promise<void>;
+  deleteDocuments: (
+    documentIds: string[],
+  ) => Promise<{ deleted: number; failed: Array<{ documentId: string; message: string }> }>;
   reparseDocument: (documentId: string) => Promise<void>;
 }
 
@@ -187,6 +207,93 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     [reload, logout],
   );
 
+  const setBatchDocumentExceptions = useCallback(
+    async (knowledgeBaseId: string, documentIds: string[], exceptions: AclException[]) => {
+      try {
+        const response = await updateDocumentsAcl(knowledgeBaseId, {
+          documentIds,
+          exceptions,
+          mode: "replace",
+        });
+        await reload();
+        return response;
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
+  const createKnowledgeBase = useCallback(
+    async (input: CreateKnowledgeBaseRequest) => {
+      try {
+        const response = await createKnowledgeBaseRequest(input);
+        await reload();
+        return response.knowledgeBase;
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
+  const deleteKnowledgeBase = useCallback(
+    async (knowledgeBaseId: string) => {
+      try {
+        await deleteKnowledgeBaseRequest(knowledgeBaseId);
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
+  const deleteDocument = useCallback(
+    async (documentId: string) => {
+      try {
+        await deleteDocumentRequest(documentId);
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
+  const deleteDocuments = useCallback(
+    async (documentIds: string[]) => {
+      let deleted = 0;
+      const failed: Array<{ documentId: string; message: string }> = [];
+      for (const documentId of documentIds) {
+        try {
+          await deleteDocumentRequest(documentId);
+          deleted += 1;
+        } catch (cause) {
+          if (cause instanceof ApiError && cause.status === 401) {
+            await logout();
+          }
+          failed.push({ documentId, message: apiErrorMessage(cause) });
+        }
+      }
+      await reload();
+      return { deleted, failed };
+    },
+    [reload, logout],
+  );
+
   const reparseDocument = useCallback(
     async (documentId: string) => {
       try {
@@ -212,6 +319,11 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
         reload,
         setDocumentExceptions,
         setDefaultSubjects,
+        setBatchDocumentExceptions,
+        createKnowledgeBase,
+        deleteKnowledgeBase,
+        deleteDocument,
+        deleteDocuments,
         reparseDocument,
       }}
     >

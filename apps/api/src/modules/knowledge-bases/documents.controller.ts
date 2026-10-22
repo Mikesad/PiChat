@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Inject,
@@ -48,6 +49,12 @@ export class DocumentsController {
     @CurrentUser() user: SessionUser,
   ): Promise<ReparseDocumentResponse> {
     return { document: await this.documentsService.reparse(user, id) };
+  }
+
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@Param("id") id: string, @CurrentUser() user: SessionUser): Promise<void> {
+    await this.documentsService.remove(user, id);
   }
 
   @Put(":id/acl")

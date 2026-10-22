@@ -43,7 +43,9 @@ async function bootstrap() {
     }
   });
 
-  app.setGlobalPrefix("api");
+  app.setGlobalPrefix("api", {
+    exclude: ["internal/access/scope", "internal/access/check"],
+  });
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableCors({
     origin: true,

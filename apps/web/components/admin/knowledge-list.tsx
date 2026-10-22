@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { defaultAccessLabel, documentStats } from "@/lib/admin-data";
 import { useAuth } from "../auth/auth-provider";
 import { Icon, Spinner } from "../icons";
 import { useAdminData } from "./admin-data";
-import { useNotImplemented } from "./not-implemented";
+import { CreateKnowledgeDrawer } from "./create-knowledge-drawer";
 import {
   Badge,
   Button,
@@ -26,8 +27,9 @@ import {
 export function KnowledgeListPage() {
   const { knowledgeBases, status, error, reload } = useAdminData();
   const { user } = useAuth();
-  const notifyNotImplemented = useNotImplemented();
+  const router = useRouter();
   const [query, setQuery] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
   const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
 
   const filtered = useMemo(() => {
@@ -62,7 +64,7 @@ export function KnowledgeListPage() {
       description="管理文档解析、检索范围与默认访问权限。权限变更会在下一次提问时生效。"
       actions={
         canManage ? (
-          <Button onClick={() => notifyNotImplemented("新建知识库")}>
+          <Button onClick={() => setCreateOpen(true)}>
             <Icon name="plus" size={15} />
             新建知识库
           </Button>
@@ -160,12 +162,12 @@ export function KnowledgeListPage() {
               title="当前账号没有可见的知识库"
               description={
                 canManage
-                  ? "知识库创建接口将在后续冲刺接入；本轮请使用种子数据。"
+                  ? "创建知识库后即可上传文档并配置默认访问范围。"
                   : "请联系管理员为你的账号或用户组授予读取权限。"
               }
               action={
                 canManage ? (
-                  <Button onClick={() => notifyNotImplemented("新建知识库")}>
+                  <Button onClick={() => setCreateOpen(true)}>
                     <Icon name="plus" size={15} />
                     新建知识库
                   </Button>
@@ -353,6 +355,16 @@ export function KnowledgeListPage() {
           </ul>
         </>
       )}
+
+      {createOpen ? (
+        <CreateKnowledgeDrawer
+          onClose={() => setCreateOpen(false)}
+          onCreated={(knowledgeBaseId) => {
+            setCreateOpen(false);
+            router.push(`/knowledge/${knowledgeBaseId}`);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -5,9 +5,8 @@ import type { AdminDocument, AdminKnowledgeBase } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
 import { useAuth } from "../auth/auth-provider";
 import { Icon, Spinner } from "../icons";
-import { DocumentAclDrawer } from "./acl";
+import { BulkAclDrawer, DocumentAclDrawer } from "./acl";
 import { useAdminData } from "./admin-data";
-import { useNotImplemented } from "./not-implemented";
 import {
   Badge,
   Button,
@@ -46,7 +45,6 @@ interface PermissionRow {
 export function PermissionsPage() {
   const { knowledgeBases, status, error, reload } = useAdminData();
   const { user } = useAuth();
-  const notifyNotImplemented = useNotImplemented();
   const [query, setQuery] = useState("");
   const [knowledgeBaseFilter, setKnowledgeBaseFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -56,6 +54,7 @@ export function PermissionsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
+  const [bulkAclOpen, setBulkAclOpen] = useState(false);
   const kbSelectId = useId();
   const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
 
@@ -128,6 +127,15 @@ export function PermissionsPage() {
   }, [rows, knowledgeBases.length]);
 
   const visibleIds = filteredRows.map((row) => row.document.id);
+  const selectedKnowledgeBaseIds = [
+    ...new Set(
+      rows
+        .filter((row) => selectedIds.includes(row.document.id))
+        .map((row) => row.knowledgeBase.id),
+    ),
+  ];
+  const bulkKnowledgeBaseId =
+    selectedKnowledgeBaseIds.length === 1 ? (selectedKnowledgeBaseIds[0] ?? null) : null;
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
   const someVisibleSelected = visibleIds.some((id) => selectedIds.includes(id));
@@ -585,19 +593,34 @@ export function PermissionsPage() {
 
       {canManage && selectedIds.length > 0 ? (
         <div className="fixed inset-x-3 bottom-4 z-40 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-pop sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2">
-          <p className="mr-auto text-xs font-medium text-fg">已选 {selectedIds.length} 篇</p>
-          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
+          <p className="mr-auto text-xs font-medium text-fg">
+            已选 {selectedIds.length} 篇
+            {selectedKnowledgeBaseIds.length > 1 ? (
+              <span className="ml-2 font-normal text-warning">批量授权一次只能选择一个知识库</span>
+            ) : null}
+          </p>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setBulkAclOpen(true)}
+            disabled={!bulkKnowledgeBaseId}
+          >
             <Icon name="shield-check" size={13} />
-            授予读取
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
-            <Icon name="ban" size={13} />
-            添加拒绝
+            批量授权
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>
             清除
           </Button>
         </div>
+      ) : null}
+
+      {bulkAclOpen && bulkKnowledgeBaseId ? (
+        <BulkAclDrawer
+          knowledgeBaseId={bulkKnowledgeBaseId}
+          documentIds={selectedIds}
+          onClose={() => setBulkAclOpen(false)}
+          onApplied={() => setSelectedIds([])}
+        />
       ) : null}
 
       {aclDocumentId ? (

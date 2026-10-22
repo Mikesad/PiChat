@@ -4,12 +4,13 @@ import { IngestionModule } from "../ingestion/ingestion.module";
 import { AccessCheckController } from "./access-check.controller";
 import { DocumentsController } from "./documents.controller";
 import { DocumentsService } from "./documents.service";
+import { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 import { KnowledgeBasesController } from "./knowledge-bases.controller";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
 @Module({
   imports: [AccessControlModule, IngestionModule],
   controllers: [KnowledgeBasesController, DocumentsController, AccessCheckController],
-  providers: [KnowledgeBasesService, DocumentsService],
+  providers: [KnowledgeBasesService, DocumentsService, KnowledgeBaseRemoteService],
 })
 export class KnowledgeBasesModule {}

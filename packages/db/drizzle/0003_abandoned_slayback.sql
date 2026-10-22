@@ -1,0 +1,1 @@
+ALTER TABLE `messages` MODIFY COLUMN `created_at` timestamp(3) NOT NULL DEFAULT (now());

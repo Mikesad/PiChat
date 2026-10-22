@@ -44,6 +44,63 @@ describe("RAGFlow client", () => {
     expect(toParseState({ status: 4 })).toBe("failed");
   });
 
+  it("maps RAGFlow v1 ingestion_status values", () => {
+    expect(toParseState({ ingestion_status: "COMPLETED", status: "1" })).toBe("ready");
+    expect(toParseState({ ingestion_status: "FAILED", status: "1" })).toBe("failed");
+    expect(toParseState({ ingestion_status: "RUNNING", status: "1" })).toBe("parsing");
+    expect(toParseState({ ingestion_status: "SCHEDULED", status: "1" })).toBe("pending");
+  });
+
+  it("deletes a dataset with a JSON body", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse(true),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    await client.deleteDataset("ds-1");
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://ragflow/api/v1/datasets");
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(String(init.body))).toEqual({ ids: ["ds-1"] });
+  });
+
+  it("treats a 404 dataset deletion as idempotent success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: 102, message: "Dataset not found" }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    await expect(client.deleteDataset("ds-missing")).resolves.toBeUndefined();
+  });
+
+  it("throws when RAGFlow rejects dataset deletion with a non-zero code", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: 109, message: "permission denied" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    await expect(client.deleteDataset("ds-1")).rejects.toMatchObject({
+      name: "RAGFlowError",
+      code: 109,
+    });
+  });
+
   it("finds datasets and documents from list responses", async () => {
     const fetchMock = vi
       .fn()

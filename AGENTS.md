@@ -8,7 +8,7 @@
 
 - `README.md`：当前完成度、环境要求、服务端口。
 - `docs/当前进度.md`：当前完成度、已确认决策、mock/真实边界、环境阻塞、第一冲刺与验收。新会话接手后端前必须先读；每完成一个阶段更新它。
-- `docs/adr/`：Pi SDK、MySQL ACL、SSE 的关键决策。
+- `docs/adr/`：Pi SDK、MySQL ACL、SSE、Runtime JSONL 的关键决策。
 - `package.json`、`turbo.json`、各 workspace 的 `package.json`：命令的最终事实来源。
 
 文档与脚本冲突时，以脚本和配置为准。进度文件是交接索引，不替代代码、Schema 和 ADR。
@@ -62,7 +62,9 @@ pnpm format
 - ACL 缓存 key 必须带 `acl_version`；权限撤销后下一次工具调用立即生效。
 - 开源 RAGFlow 只有 dataset 级权限，文档级授权由 PiChat 自己实现，不要依赖 RAGFlow 的权限 UI。
 - 跨租户查询必须有集成测试；没有测试就不要声称隔离完成。
-- 模型配置的 API Key 当前只放在浏览器 sessionStorage；真实实现必须写入服务端的加密字段（`model_configs.encrypted_api_key`），不得持久化明文密钥到 localStorage。
+- 模型配置的 API Key 必须服务端 AES-256-GCM 加密存储（`model_configs.encrypted_api_key`），只在单次 Runtime run 的内存中出现；不得进浏览器、日志或 SSE。
+- Runtime 只通过 `INTERNAL_SHARED_SECRET` 保护的 `/internal/*` 接口通信；API Key 不得写入磁盘或提交到仓库。
+- Pi 会话 JSONL 由 Runtime 持久化在 `AGENT_RUNTIME_DATA_DIR`；业务 API 负责 MySQL `messages` 产品消息。两边都从同一次 run 产生，API 不读 JSONL，Runtime 不写聊天消息表。
 
 ## RAGFlow 约束
 
@@ -76,30 +78,32 @@ pnpm format
 
 - 使用 `@earendil-works/pi-coding-agent` 1.3.0；旧的 `@mariozechner/*` 已废弃。
 - Pi 内置的 `read` / `write` / `edit` / `bash` 必须禁用，只注册知识库工具。
-- 工具权限用 `tool_call` 拦截，工具结果用 `tool_result` 脱敏；高风险工具需要审批。
-- Pi extension 与 Runtime 有相同的操作系统权限。只加载管理员审核过的 extension，不加载用户可控资源。
-- Runtime 的 `cwd` 必须是隔离空目录，不要把上传文档放进去。
-- 当前 `apps/agent-runtime` 只有健康检查和 Session 工厂；尚未接入 prompt、SSE、工具和会话持久化。不要把它当作已完成。
+- Runtime 已接入 prompt、SSE、`kb_search` / `kb_read` 和 Pi JSONL 会话持久化；内置编码工具仍然禁用。
+- 工具权限用 `tool_call` 拦截，工具结果用 `tool_result` 脱敏；当前只允许知识库工具。
+- Runtime 的 `cwd` 是每会话隔离空目录，不存放上传文件；`noExtensions` / `noSkills` / `noContextFiles` 保持开启。
+- `kb_read` 只接受 `kb_search` 返回的引用序号，不接受模型传入的 `documentId`。
 - 新增流式事件必须复用 `packages/shared/src/sse.ts`，不要另造事件格式。
 
 ## 环境与本地服务
 
 - 根 `.env` 供 API / Runtime / Worker 使用；Web 使用 `apps/web/.env.local` 的 `API_URL`。
+- `INTERNAL_SHARED_SECRET` 必须由 API 与 Runtime 共用；`AGENT_RUNTIME_DATA_DIR` 指向 Runtime JSONL 与工作目录，`AGENT_RUNTIME_URL` / `API_INTERNAL_URL` 供内部调用。这些值只写入本地 `.env`，不要提交。
 - 当前开发机使用本机 MySQL **3306** 和专用库 `pichat`；Docker Compose 仍映射 3307，Redis 6379，MinIO 9000/9001。
 - RAGFlow 使用独立部署，不包含在 `infra/docker/compose.dev.yaml` 中。
 - `pnpm db:push` 会直接修改数据库；对共享或生产库执行前必须先征得用户同意。
 - Schema 改动后运行 `pnpm db:generate` 生成迁移，不要手改 `packages/db/drizzle/` 下的已生成 SQL。
+- `messages.created_at` 已改为 `timestamp(3)` 以保留毫秒顺序；迁移 `0003_abandoned_slayback.sql`。本机为保留现有消息，使用 `ALTER TABLE` 应用了同等变更，`db:push` 随后显示无变化；新环境可用迁移或 `db:push`，但不要接受 drizzle 的 `truncate table messages` 数据丢失提示。
 - Next.js 的 `output: "standalone"` 曾在 Windows 上触发 symlink EPERM，当前未启用；不要随意加回，除非部署环境支持。
 - 本机虚拟内存偏紧；`next dev` 可能在按需编译 `/api/[...path]` 时因 `RangeError: Array buffer allocation failed` 崩溃。需要稳定查看 UI 时先 `pnpm --filter @pichat/web build` 再 `pnpm --filter @pichat/web start`。
 
 ## 当前完成度
 
-已实现：monorepo、对话主界面、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、模型配置 UI（浏览器会话密钥）、成员与组和审计日志 UI（仍为 mock）、Runtime/Worker 骨架、MySQL Schema、ACL 纯策略与 API 测试共 26 个、RAGFlow 客户端、SSE 协议。
+已实现：monorepo、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、用户级模型配置加密存储、文档上传与 Worker RAGFlow 轮询、Agent Runtime（prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话）、业务 API 的 chat 会话/消息/SSE 代理与 MySQL 落库、真实对话 UI（流式、思考、工具、引用、停止、重试）、知识库同步创建与软删除、文档软删除与清理、同库多文档批量授权（整体替换）。成员与组和审计日志 UI 仍为 mock。
 
-未实现：服务端模型配置与加密密钥、文档上传与 RAGFlow 解析轮询、SSE 对话接口、Agent Runtime 工具、本地成员/组编辑与密码重置、审计查询 API 与审计页接真、生产硬化、MCP/CLI、多租户 SaaS。
+未实现：真实 RAGFlow 解析与检索 E2E（等 Redis/RAGFlow 环境）、本地成员/组编辑与密码重置、审计查询 API 与审计页接真、知识库设置修改、生产硬化、MCP/CLI、多租户 SaaS。
 
-登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；模型配置在 `components/model-config`，通过左下角账号菜单打开。
+登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；模型配置在 `components/model-config`，通过左下角账号菜单打开。对话页在 `apps/web/components/chat-workspace.tsx`，通过 Web BFF 调用业务 API。
 
 管理端页面在 `apps/web/app/(admin)`：`knowledge` 与 `permissions` 已接真实 API；`members` 与 `audit` 仍是 mock，不要把这两页的可用人数或访问检查当成真实授权结果。
 
-`pnpm test` 目前覆盖 ACL 纯策略与 API/跨租户集成，共 26 个测试，但不是完整端到端覆盖；不要用健康检查通过来推断业务链路可用。
+`pnpm test` 覆盖 ACL 纯策略、SSE 解析、Runtime faux 集成、kb_search ACL 过滤、API 会话归属/内部 ACL/模型配置/聊天重试/跨租户、知识库创建与软删除、文档删除清理、批量授权与 Worker 删除竞态；当前共 89 个测试，但不是完整端到端覆盖。真实 RAGFlow 检索和解析仍以环境可用性为准。

@@ -55,7 +55,13 @@ export async function proxyToApi(request: Request, path: string): Promise<Respon
   if (responseContentType) {
     responseHeaders.set("content-type", responseContentType);
   }
-  responseHeaders.set("cache-control", "no-store");
+  if (responseContentType?.includes("text/event-stream")) {
+    responseHeaders.set("cache-control", "no-cache, no-transform");
+    responseHeaders.set("connection", "keep-alive");
+    responseHeaders.set("x-accel-buffering", "no");
+  } else {
+    responseHeaders.set("cache-control", "no-store");
+  }
 
   const setCookies = upstream.headers.getSetCookie();
   if (setCookies.length > 0) {

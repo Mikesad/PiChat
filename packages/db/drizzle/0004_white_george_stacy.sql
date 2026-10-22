@@ -1,0 +1,1 @@
+ALTER TABLE `knowledge_bases` ADD `deleted_at` timestamp;

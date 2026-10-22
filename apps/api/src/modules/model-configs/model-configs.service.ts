@@ -5,14 +5,25 @@ import { modelConfigs } from "@pichat/db";
 import type {
   CreateModelConfigRequest,
   ModelConfigSummary,
+  ModelProviderId,
   SessionUser,
   UpdateModelConfigRequest,
 } from "@pichat/shared";
+import { modelProviders } from "@pichat/shared";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { conflict, notFound } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
 import type { ModelConfigCrypto } from "../../common/model-config-crypto";
 import { MODEL_CONFIG_CRYPTO } from "./model-config-crypto.provider";
+
+export interface ResolvedModelConfig {
+  id: string;
+  provider: string;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+  apiKey: string;
+}
 
 @Injectable()
 export class ModelConfigsService {
@@ -221,6 +232,74 @@ export class ModelConfigsService {
       throw notFound();
     }
     return this.toSummary(row);
+  }
+
+  async resolveForRun(
+    principal: SessionUser,
+    modelConfigId?: string,
+  ): Promise<ResolvedModelConfig> {
+    let row: ModelConfig | null = null;
+
+    if (modelConfigId) {
+      row = await this.findOwned(principal, modelConfigId);
+      if (!row) {
+        throw notFound();
+      }
+    } else {
+      const defaultRows = await this.db
+        .select()
+        .from(modelConfigs)
+        .where(
+          and(
+            eq(modelConfigs.tenantId, principal.tenantId),
+            eq(modelConfigs.userId, principal.id),
+            eq(modelConfigs.isDefault, true),
+            eq(modelConfigs.enabled, true),
+          ),
+        )
+        .limit(1);
+      row = defaultRows[0] ?? null;
+
+      if (!row) {
+        const fallbackRows = await this.db
+          .select()
+          .from(modelConfigs)
+          .where(
+            and(
+              eq(modelConfigs.tenantId, principal.tenantId),
+              eq(modelConfigs.userId, principal.id),
+              eq(modelConfigs.enabled, true),
+            ),
+          )
+          .orderBy(desc(modelConfigs.updatedAt))
+          .limit(1);
+        row = fallbackRows[0] ?? null;
+      }
+    }
+
+    if (!row?.enabled) {
+      throw conflict("请先在账号菜单中配置可用模型");
+    }
+    if (!row.encryptedApiKey) {
+      throw conflict("模型配置缺少 API Key，请重新保存");
+    }
+
+    const provider = row.provider as ModelProviderId;
+    const fallbackBaseUrl =
+      provider in modelProviders ? modelProviders[provider].defaultBaseUrl : "";
+    const baseUrl = (row.baseUrl ?? "").trim() || fallbackBaseUrl;
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw conflict("模型 Base URL 无效，请重新保存");
+    }
+
+    return {
+      id: row.id,
+      provider: row.provider,
+      modelId: row.modelId,
+      displayName: row.displayName,
+      baseUrl,
+      apiKey: this.crypto.decrypt(row.encryptedApiKey),
+    };
   }
 
   private async findOwned(principal: SessionUser, id: string): Promise<ModelConfig | null> {

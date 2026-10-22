@@ -85,6 +85,16 @@ export interface DocumentSummary {
   updatedAt: string;
 }
 
+export interface CreateKnowledgeBaseRequest {
+  name: string;
+  description?: string;
+  embeddingModel?: string;
+}
+
+export interface CreateKnowledgeBaseResponse {
+  knowledgeBase: KnowledgeBaseSummary;
+}
+
 export interface KnowledgeBaseListResponse {
   knowledgeBases: KnowledgeBaseSummary[];
 }
@@ -104,6 +114,17 @@ export interface UpdateDocumentAclRequest {
 export interface UpdateDocumentAclResponse {
   aclVersion: number;
   document: DocumentSummary;
+}
+
+export interface BatchUpdateDocumentAclRequest {
+  documentIds: string[];
+  exceptions: AclException[];
+  mode?: "replace";
+}
+
+export interface BatchUpdateDocumentAclResponse {
+  aclVersion: number;
+  documents: DocumentSummary[];
 }
 
 export interface UpdateKnowledgeBaseAclRequest {

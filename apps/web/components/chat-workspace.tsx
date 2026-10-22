@@ -1,45 +1,89 @@
 "use client";
 
+import type {
+  ChatCitation,
+  ChatMessageSummary,
+  ChatRunStatus,
+  ChatSessionSummary,
+  ThinkingLevel,
+  ToolEndData,
+  ToolStartData,
+} from "@pichat/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  type ChatMessage,
-  demoAnswer,
-  demoCitations,
-  demoThinking,
-  knowledgeBases,
-  type Session,
-  seedMessages,
-  seedSessions,
-  type ToolCall,
-} from "@/lib/chat-data";
+  abortChatRun,
+  apiErrorMessage,
+  createChatSession,
+  fetchChatMessages,
+  fetchChatSessions,
+  fetchKnowledgeBases,
+  streamChatMessage,
+} from "@/lib/api-client";
+import type { ChatMessage, KnowledgeBase, MessageStatus, Session, ToolCall } from "@/lib/chat-data";
+import { consumeChatStream } from "@/lib/chat-stream";
+import { formatTime } from "@/lib/utils";
+import { useToast } from "./admin/toast";
 import { ChatHeader } from "./chat-header";
 import { CitationsPanel } from "./citations-panel";
 import { Composer } from "./composer";
 import { EmptyState } from "./empty-state";
 import { MessageList } from "./message-list";
+import { useModelConfig } from "./model-config/model-config-provider";
 import { Sidebar } from "./sidebar";
 
 type RunStatus = "idle" | "thinking" | "streaming";
 
+interface RunStartData {
+  runId: string;
+  sessionId: string;
+  assistantMessageId: string;
+}
+
+interface TextDeltaData {
+  delta: string;
+}
+
+interface ErrorData {
+  code: string;
+  message: string;
+}
+
+interface RunEndData {
+  runId: string;
+  sessionId: string;
+  assistantMessageId: string;
+  status: ChatRunStatus;
+  content: string;
+  thinking: string;
+  tools: Array<{
+    id: string;
+    name: string;
+    label?: string;
+    description: string;
+    status: "running" | "done" | "error";
+    durationMs?: number;
+  }>;
+  citations: ChatCitation[];
+  error?: { message?: string };
+}
+
 export function ChatWorkspace() {
-  const [sessions, setSessions] = useState<Session[]>(seedSessions);
-  const [activeSessionId, setActiveSessionId] = useState("s1");
-  const [threads, setThreads] = useState<Record<string, ChatMessage[]>>({
-    s1: seedMessages,
-    s2: [],
-    s3: [],
-    s4: [],
-  });
+  const { showToast } = useToast();
+  const { activeConfig, ready: modelsReady } = useModelConfig();
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Record<string, ChatMessage[]>>({});
   const [draft, setDraft] = useState("");
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
+  const [loadingThread, setLoadingThread] = useState(false);
   const [selectedCitationId, setSelectedCitationId] = useState<string | null>(null);
   const [citationsOpen, setCitationsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
 
-  const timersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const runRef = useRef<{ sessionId: string; assistantId: string } | null>(null);
+  const runIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const didMountRef = useRef(false);
@@ -48,10 +92,10 @@ export function ChatWorkspace() {
   const citationsReturnFocusRef = useRef<HTMLElement | null>(null);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
-  const messages = threads[activeSessionId] ?? [];
+  const messages = activeSessionId ? (threads[activeSessionId] ?? []) : [];
 
   const citations = useMemo(() => {
-    const thread = threads[activeSessionId] ?? [];
+    const thread = activeSessionId ? (threads[activeSessionId] ?? []) : [];
     if (selectedCitationId) {
       for (const message of thread) {
         if (
@@ -70,17 +114,6 @@ export function ChatWorkspace() {
     }
     return [];
   }, [threads, activeSessionId, selectedCitationId]);
-
-  const clearRun = useCallback(() => {
-    for (const timer of timersRef.current) {
-      clearTimeout(timer);
-    }
-    timersRef.current = [];
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-  }, []);
 
   const openSidebar = useCallback(() => {
     sidebarReturnFocusRef.current =
@@ -107,8 +140,6 @@ export function ChatWorkspace() {
     citationsReturnFocusRef.current = null;
     window.requestAnimationFrame(() => target?.focus());
   }, []);
-
-  useEffect(() => clearRun, [clearRun]);
 
   useEffect(() => {
     if (citationsOpen) {
@@ -171,14 +202,95 @@ export function ChatWorkspace() {
     container.scrollTop = container.scrollHeight;
   }, [messages]);
 
-  const patchMessage = useCallback(
-    (sessionId: string, messageId: string, patch: Partial<ChatMessage>) => {
+  const refreshSessions = useCallback(async () => {
+    try {
+      const response = await fetchChatSessions();
+      setSessions(response.sessions.map(toUiSession));
+    } catch {
+      // Keep the current list; the next action will retry.
+    }
+  }, []);
+
+  const loadThread = useCallback(
+    async (sessionId: string) => {
+      setLoadingThread(true);
+      try {
+        const response = await fetchChatMessages(sessionId);
+        setThreads((previous) => ({
+          ...previous,
+          [sessionId]: response.messages.map(toUiMessage),
+        }));
+        setSessions((previous) =>
+          previous.map((session) =>
+            session.id === sessionId ? toUiSession(response.session) : session,
+          ),
+        );
+      } catch (error) {
+        setThreads((previous) => ({ ...previous, [sessionId]: [] }));
+        showToast(apiErrorMessage(error), "danger");
+      } finally {
+        setLoadingThread(false);
+      }
+    },
+    [showToast],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadInitial() {
+      try {
+        const [sessionResponse, knowledgeResponse] = await Promise.all([
+          fetchChatSessions(),
+          fetchKnowledgeBases(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        const nextSessions = sessionResponse.sessions.map(toUiSession);
+        setSessions(nextSessions);
+        setKnowledgeBases(
+          knowledgeResponse.knowledgeBases.map((knowledgeBase) => ({
+            id: knowledgeBase.id,
+            name: knowledgeBase.name,
+            documentCount: knowledgeBase.readableDocumentCount,
+          })),
+        );
+        if (nextSessions[0]) {
+          setActiveSessionId(nextSessions[0].id);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          showToast(apiErrorMessage(error), "danger");
+        }
+      }
+    }
+    void loadInitial();
+    return () => {
+      cancelled = true;
+    };
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return;
+    }
+    if (threads[activeSessionId] !== undefined) {
+      return;
+    }
+    void loadThread(activeSessionId);
+  }, [activeSessionId, threads, loadThread]);
+
+  const updateMessage = useCallback(
+    (sessionId: string, messageId: string, updater: (message: ChatMessage) => ChatMessage) => {
       setThreads((previous) => {
-        const thread = previous[sessionId] ?? [];
+        const thread = previous[sessionId];
+        if (!thread) {
+          return previous;
+        }
         return {
           ...previous,
           [sessionId]: thread.map((message) =>
-            message.id === messageId ? { ...message, ...patch } : message,
+            message.id === messageId ? updater(message) : message,
           ),
         };
       });
@@ -186,14 +298,159 @@ export function ChatWorkspace() {
     [],
   );
 
+  const handleEvent = useCallback(
+    (sessionId: string, assistantId: string, event: { type: string; data: unknown }) => {
+      const data = event.data as Record<string, unknown>;
+
+      switch (event.type) {
+        case "run.start": {
+          const start = data as unknown as RunStartData;
+          runIdRef.current = start.runId;
+          setRunStatus("thinking");
+          break;
+        }
+        case "text.delta": {
+          const delta = data as unknown as TextDeltaData;
+          if (typeof delta.delta !== "string" || delta.delta.length === 0) {
+            return;
+          }
+          updateMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            content: message.content + delta.delta,
+            status: "streaming",
+          }));
+          setRunStatus("streaming");
+          break;
+        }
+        case "thinking.delta": {
+          const delta = data as unknown as TextDeltaData;
+          if (typeof delta.delta !== "string" || delta.delta.length === 0) {
+            return;
+          }
+          updateMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            thinking: `${message.thinking ?? ""}${delta.delta}`,
+          }));
+          break;
+        }
+        case "tool.start": {
+          const tool = data as unknown as ToolStartData;
+          updateMessage(sessionId, assistantId, (message) => {
+            const existing = message.tools ?? [];
+            if (existing.some((item) => item.id === tool.toolCallId)) {
+              return message;
+            }
+            return {
+              ...message,
+              tools: [
+                ...existing,
+                {
+                  id: tool.toolCallId,
+                  name: tool.label || tool.toolName,
+                  description: tool.description,
+                  status: "running",
+                },
+              ],
+            };
+          });
+          break;
+        }
+        case "tool.end": {
+          const tool = data as unknown as ToolEndData;
+          updateMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            tools: (message.tools ?? []).map((item) =>
+              item.id === tool.toolCallId
+                ? {
+                    ...item,
+                    status: tool.status === "error" ? "error" : "done",
+                    durationMs: tool.durationMs,
+                    description: tool.description ?? item.description,
+                  }
+                : item,
+            ),
+          }));
+          break;
+        }
+        case "citation.add": {
+          const citation = data as unknown as ChatCitation;
+          if (typeof citation.id !== "string") {
+            return;
+          }
+          updateMessage(sessionId, assistantId, (message) => {
+            const existing = message.citations ?? [];
+            if (existing.some((item) => item.id === citation.id)) {
+              return message;
+            }
+            return {
+              ...message,
+              citations: [...existing, citation].sort((left, right) => left.index - right.index),
+            };
+          });
+          break;
+        }
+        case "error": {
+          const error = data as unknown as ErrorData;
+          updateMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            status: "error",
+            error: error.message,
+          }));
+          break;
+        }
+        case "run.end": {
+          const end = data as unknown as RunEndData;
+          updateMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            content: end.content,
+            thinking: end.thinking,
+            tools: (end.tools ?? []).map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              description: tool.description,
+              status: tool.status,
+              durationMs: tool.durationMs,
+            })),
+            citations: end.citations ?? [],
+            status: toMessageStatus(end.status),
+            error: end.error?.message,
+          }));
+          setRunStatus("idle");
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [updateMessage],
+  );
+
   const send = useCallback(
-    (raw: string) => {
+    async (raw: string, thinkingLevel: ThinkingLevel = "medium", retry = false) => {
       const text = raw.trim();
       if (!text || runStatus !== "idle") {
         return;
       }
+      if (modelsReady && !activeConfig) {
+        showToast("请先在左下角账号菜单中配置模型。", "danger");
+        return;
+      }
 
-      const sessionId = activeSessionId;
+      let sessionId = activeSessionId;
+      try {
+        if (!sessionId) {
+          const created = await createChatSession({});
+          sessionId = created.session.id;
+          setSessions((previous) => [toUiSession(created.session), ...previous]);
+          setThreads((previous) => ({ ...previous, [sessionId as string]: [] }));
+          setActiveSessionId(sessionId);
+        }
+      } catch (error) {
+        showToast(apiErrorMessage(error), "danger");
+        return;
+      }
+
+      const targetSessionId = sessionId as string;
       const assistantId = `assistant-${Date.now()}`;
       const timestamp = new Date().toISOString();
       const userMessage: ChatMessage = {
@@ -209,158 +466,84 @@ export function ChatWorkspace() {
         content: "",
         createdAt: timestamp,
         status: "thinking",
-        thinking: demoThinking,
+        thinking: "",
         tools: [],
         citations: [],
       };
 
       setThreads((previous) => ({
         ...previous,
-        [sessionId]: [...(previous[sessionId] ?? []), userMessage, assistantMessage],
+        [targetSessionId]: [
+          ...(previous[targetSessionId] ?? []),
+          ...(retry ? [] : [userMessage]),
+          assistantMessage,
+        ],
       }));
       setDraft("");
       setRunStatus("thinking");
       setSelectedCitationId(null);
       setFocusKey((value) => value + 1);
       nearBottomRef.current = true;
-      runRef.current = { sessionId, assistantId };
+      runIdRef.current = null;
 
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.id === sessionId
-            ? {
-                ...session,
-                title: session.title === "新对话" ? text.slice(0, 24) : session.title,
-                updatedLabel: "刚刚",
-              }
-            : session,
-        ),
-      );
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-      const searchId = `tool-search-${assistantId}`;
-      const readId = `tool-read-${assistantId}`;
-
-      timersRef.current.push(
-        setTimeout(() => {
-          patchMessage(sessionId, assistantId, {
-            tools: [
-              {
-                id: searchId,
-                name: "kb.search",
-                description: `query=${text.slice(0, 28)} · 检索 ${knowledgeBases.length} 个已授权知识库`,
-                status: "running",
-              },
-            ],
-          });
-        }, 700),
-        setTimeout(() => {
-          patchMessage(sessionId, assistantId, {
-            tools: [
-              {
-                id: searchId,
-                name: "kb.search",
-                description: `query=${text.slice(0, 28)} · 命中 6 个片段`,
-                status: "done",
-                durationMs: 386,
-              },
-              {
-                id: readId,
-                name: "kb.read",
-                description: "读取命中文档并复核权限",
-                status: "running",
-              },
-            ],
-          });
-        }, 1400),
-        setTimeout(() => {
-          patchMessage(sessionId, assistantId, {
-            tools: [
-              {
-                id: searchId,
-                name: "kb.search",
-                description: `query=${text.slice(0, 28)} · 命中 6 个片段`,
-                status: "done",
-                durationMs: 386,
-              },
-              {
-                id: readId,
-                name: "kb.read",
-                description: "读取 2 份文档：差旅管理制度、员工报销管理办法",
-                status: "done",
-                durationMs: 164,
-              },
-            ],
-          });
-        }, 2000),
-        setTimeout(() => {
-          patchMessage(sessionId, assistantId, {
-            citations: demoCitations,
-            status: "streaming",
-          });
-          setRunStatus("streaming");
-
-          const characters = Array.from(demoAnswer);
-          let index = 0;
-          intervalRef.current = setInterval(() => {
-            index = Math.min(index + 3, characters.length);
-            patchMessage(sessionId, assistantId, {
-              content: characters.slice(0, index).join(""),
-            });
-
-            if (index >= characters.length) {
-              if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-              }
-              patchMessage(sessionId, assistantId, { status: "done" });
-              setRunStatus("idle");
-              runRef.current = null;
-              timersRef.current = [];
-            }
-          }, 24);
-        }, 2400),
-      );
+      try {
+        const response = await streamChatMessage(
+          targetSessionId,
+          { content: text, thinkingLevel, retry },
+          controller.signal,
+        );
+        await consumeChatStream(response, (event) =>
+          handleEvent(targetSessionId, assistantId, event),
+        );
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          const message = apiErrorMessage(error);
+          updateMessage(targetSessionId, assistantId, (current) => ({
+            ...current,
+            status: "error",
+            error: message,
+          }));
+          showToast(message, "danger");
+        }
+      } finally {
+        setRunStatus("idle");
+        runIdRef.current = null;
+        abortRef.current = null;
+        void refreshSessions();
+      }
     },
-    [activeSessionId, patchMessage, runStatus],
+    [
+      activeConfig,
+      activeSessionId,
+      handleEvent,
+      modelsReady,
+      refreshSessions,
+      runStatus,
+      showToast,
+      updateMessage,
+    ],
   );
 
   const stop = useCallback(() => {
-    clearRun();
-    const run = runRef.current;
-    if (run) {
-      setThreads((previous) => {
-        const thread = previous[run.sessionId] ?? [];
-        return {
-          ...previous,
-          [run.sessionId]: thread.map((message) =>
-            message.id === run.assistantId
-              ? {
-                  ...message,
-                  status: "stopped",
-                  tools: message.tools?.map((tool: ToolCall) =>
-                    tool.status === "running" ? { ...tool, status: "done" } : tool,
-                  ),
-                }
-              : message,
-          ),
-        };
+    const runId = runIdRef.current;
+    if (runId) {
+      void abortChatRun(runId).catch((error) => {
+        showToast(apiErrorMessage(error), "danger");
       });
+      return;
     }
-    runRef.current = null;
+    abortRef.current?.abort();
     setRunStatus("idle");
-  }, [clearRun]);
+  }, [showToast]);
 
   function handleNewChat() {
     if (runStatus !== "idle") {
       stop();
     }
-    const id = `session-${Date.now()}`;
-    setSessions((previous) => [
-      { id, title: "新对话", updatedLabel: "刚刚", group: "今天" },
-      ...previous,
-    ]);
-    setThreads((previous) => ({ ...previous, [id]: [] }));
-    setActiveSessionId(id);
+    setActiveSessionId(null);
     setDraft("");
     setSelectedCitationId(null);
     closeSidebar();
@@ -379,14 +562,14 @@ export function ChatWorkspace() {
   }
 
   function handleSuggestion(text: string) {
-    send(text);
+    void send(text);
   }
 
   function handleRetry() {
     if (runStatus !== "idle") {
       return;
     }
-    const thread = threads[activeSessionId] ?? [];
+    const thread = activeSessionId ? (threads[activeSessionId] ?? []) : [];
     let lastUserIndex = -1;
     for (let index = thread.length - 1; index >= 0; index -= 1) {
       if (thread[index]?.role === "user") {
@@ -395,14 +578,14 @@ export function ChatWorkspace() {
       }
     }
     const lastUser = thread[lastUserIndex];
-    if (!lastUser) {
+    if (!lastUser || !activeSessionId) {
       return;
     }
     setThreads((previous) => ({
       ...previous,
-      [activeSessionId]: (previous[activeSessionId] ?? []).slice(0, lastUserIndex),
+      [activeSessionId]: (previous[activeSessionId] ?? []).slice(0, lastUserIndex + 1),
     }));
-    send(lastUser.content);
+    void send(lastUser.content, "medium", true);
   }
 
   function handleCitationSelect(id: string) {
@@ -433,7 +616,7 @@ export function ChatWorkspace() {
       <Sidebar
         mode="chat"
         sessions={sessions}
-        activeSessionId={activeSessionId}
+        activeSessionId={activeSessionId ?? ""}
         knowledgeBases={knowledgeBases}
         mobileOpen={sidebarOpen}
         onSelectSession={handleSelectSession}
@@ -460,7 +643,11 @@ export function ChatWorkspace() {
               aria-busy={runStatus !== "idle"}
               className="min-h-0 flex-1 overflow-y-auto"
             >
-              {messages.length === 0 ? (
+              {loadingThread && messages.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-subtle">
+                  正在加载会话…
+                </div>
+              ) : messages.length === 0 ? (
                 <EmptyState knowledgeBases={knowledgeBases} onSuggestion={handleSuggestion} />
               ) : (
                 <MessageList
@@ -476,7 +663,7 @@ export function ChatWorkspace() {
             <Composer
               value={draft}
               onChange={setDraft}
-              onSend={() => send(draft)}
+              onSend={(thinkingLevel) => void send(draft, thinkingLevel)}
               onStop={stop}
               streaming={runStatus !== "idle"}
               knowledgeBaseCount={knowledgeBases.length}
@@ -526,4 +713,75 @@ export function ChatWorkspace() {
       ) : null}
     </div>
   );
+}
+
+function toUiSession(session: ChatSessionSummary): Session {
+  const updated = new Date(session.updatedAt);
+  const today = new Date();
+  const isToday = updated.toDateString() === today.toDateString();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const label = isToday
+    ? formatTime(session.updatedAt)
+    : updated.toDateString() === yesterday.toDateString()
+      ? "昨天"
+      : `${updated.getMonth() + 1}月${updated.getDate()}日`;
+
+  return {
+    id: session.id,
+    title: session.title || "新对话",
+    updatedLabel: label,
+    group: isToday ? "今天" : "更早",
+  };
+}
+
+function toUiMessage(message: ChatMessageSummary): ChatMessage {
+  if (message.role === "user") {
+    return {
+      id: message.id,
+      role: "user",
+      content: message.content,
+      createdAt: message.createdAt,
+      status: "done",
+    };
+  }
+
+  const metadata = message.metadata;
+  return {
+    id: message.id,
+    role: "assistant",
+    content: message.content,
+    createdAt: message.createdAt,
+    status: toMessageStatus(metadata?.status),
+    thinking: metadata?.thinking ?? "",
+    tools: (metadata?.tools ?? []).map(toUiTool),
+    citations: metadata?.citations ?? [],
+    error: metadata?.error?.message,
+  };
+}
+
+function toUiTool(tool: {
+  id: string;
+  name: string;
+  description: string;
+  status: "running" | "done" | "error";
+  durationMs?: number;
+}): ToolCall {
+  return {
+    id: tool.id,
+    name: tool.name,
+    description: tool.description,
+    status: tool.status,
+    durationMs: tool.durationMs,
+  };
+}
+
+function toMessageStatus(status: ChatRunStatus | undefined): MessageStatus {
+  if (status === "aborted") {
+    return "stopped";
+  }
+  if (status === "error") {
+    return "error";
+  }
+  return "done";
 }

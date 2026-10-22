@@ -80,9 +80,11 @@ export interface RawRAGFlowDocument {
   name?: string;
   run?: string;
   status?: string | number;
+  ingestion_status?: string;
   progress?: number;
   run_error_msg?: string;
   message?: string;
+  progress_msg?: string;
 }
 
 export interface DocumentListInput {

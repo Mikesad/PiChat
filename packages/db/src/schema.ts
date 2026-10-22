@@ -118,6 +118,7 @@ export const knowledgeBases = mysqlTable(
     aclVersion: int("acl_version").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
   },
   (table) => [
     uniqueIndex("knowledge_bases_tenant_name_uq").on(table.tenantId, table.name),
@@ -240,7 +241,7 @@ export const messages = mysqlTable(
     role: mysqlEnum("role", ["user", "assistant", "tool", "system"]).notNull(),
     content: text("content").notNull(),
     metadata: json("metadata"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at", { fsp: 3 }).defaultNow().notNull(),
   },
   (table) => [index("messages_session_created_idx").on(table.sessionId, table.createdAt)],
 );

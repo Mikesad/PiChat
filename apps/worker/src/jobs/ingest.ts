@@ -16,6 +16,12 @@ export interface IngestionDependencies {
 
 class IngestionFailure extends Error {}
 
+class IngestionSkipped extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+  }
+}
+
 export async function processIngestion(
   job: Job<IngestionJob>,
   deps: IngestionDependencies,
@@ -44,8 +50,8 @@ export async function runIngestion(
   const knowledgeBase = await findKnowledgeBase(deps.db, tenantId, document.knowledgeBaseId);
   if (!knowledgeBase) {
     await markFailed(deps.db, document, "知识库不存在或已被删除");
-    log({ event: "ingestion_failed", documentId, reason: "knowledge_base_not_found" });
-    return { documentId, status: "failed", reason: "knowledge_base_not_found" };
+    log({ event: "ingestion_skipped", documentId, reason: "knowledge_base_not_found" });
+    return { documentId, status: "skipped", reason: "knowledge_base_not_found" };
   }
 
   try {
@@ -56,6 +62,10 @@ export async function runIngestion(
     log({ event: "ingestion_finished", documentId, status: finalState });
     return { documentId, status: finalState };
   } catch (cause) {
+    if (cause instanceof IngestionSkipped) {
+      log({ event: "ingestion_skipped", documentId, reason: cause.reason });
+      return { documentId, status: "skipped", reason: cause.reason };
+    }
     const reason = toErrorMessage(cause);
     await markFailed(deps.db, document, reason);
     log({ event: "ingestion_failed", documentId, reason });
@@ -98,15 +108,20 @@ async function ensureDataset(
     throw new IngestionFailure("RAGFlow 未返回数据集 ID");
   }
 
-  await deps.db
+  const updated = await deps.db
     .update(knowledgeBases)
     .set({ ragflowDatasetId: created.id })
     .where(
       and(
         eq(knowledgeBases.id, knowledgeBase.id),
         eq(knowledgeBases.tenantId, knowledgeBase.tenantId),
+        isNull(knowledgeBases.deletedAt),
       ),
     );
+  if (affectedRowCount(updated) === 0) {
+    await deleteRemoteDataset(deps, created.id, log);
+    throw new IngestionSkipped("knowledge_base_deleted");
+  }
   log({
     event: "dataset_created",
     knowledgeBaseId: knowledgeBase.id,
@@ -121,6 +136,10 @@ async function ensureUploaded(
   deps: IngestionDependencies,
   log: (event: Record<string, unknown>) => void,
 ): Promise<string> {
+  if (!(await isDocumentActive(deps.db, document.tenantId, document.id))) {
+    throw new IngestionSkipped("document_deleted");
+  }
+
   if (document.ragflowDocumentId) {
     if (document.status === "pending") {
       try {
@@ -130,6 +149,10 @@ async function ensureUploaded(
       }
     }
     return document.ragflowDocumentId;
+  }
+
+  if (!(await isDocumentActive(deps.db, document.tenantId, document.id))) {
+    throw new IngestionSkipped("document_deleted");
   }
 
   let data: Buffer;
@@ -150,14 +173,25 @@ async function ensureUploaded(
     throw new IngestionFailure(`上传 RAGFlow 失败：${toErrorMessage(cause)}`);
   }
 
-  await deps.db
+  const updated = await deps.db
     .update(documents)
     .set({
       ragflowDocumentId: uploaded.id,
       status: "parsing",
       errorMessage: null,
     })
-    .where(and(eq(documents.id, document.id), eq(documents.tenantId, document.tenantId)));
+    .where(
+      and(
+        eq(documents.id, document.id),
+        eq(documents.tenantId, document.tenantId),
+        isNull(documents.deletedAt),
+        ne(documents.status, "deleted"),
+      ),
+    );
+  if (affectedRowCount(updated) === 0) {
+    await deleteRemoteDocument(deps, datasetId, uploaded.id, log);
+    throw new IngestionSkipped("document_deleted");
+  }
 
   try {
     await deps.client.parseDocuments(datasetId, [uploaded.id]);
@@ -184,6 +218,11 @@ async function pollUntilFinished(
   let lastError: string | null = null;
 
   for (let attempt = 1; attempt <= deps.config.maxPollAttempts; attempt += 1) {
+    if (!(await isDocumentActive(deps.db, document.tenantId, document.id))) {
+      await deleteRemoteDocument(deps, datasetId, ragflowDocumentId, () => {});
+      throw new IngestionSkipped("document_deleted");
+    }
+
     let remote: Awaited<ReturnType<IngestionClient["getDocument"]>>;
     try {
       remote = await deps.client.getDocument(datasetId, ragflowDocumentId);
@@ -193,10 +232,21 @@ async function pollUntilFinished(
     }
 
     if (remote?.state === "ready") {
-      await deps.db
+      const updated = await deps.db
         .update(documents)
         .set({ status: "ready", errorMessage: null })
-        .where(and(eq(documents.id, document.id), eq(documents.tenantId, document.tenantId)));
+        .where(
+          and(
+            eq(documents.id, document.id),
+            eq(documents.tenantId, document.tenantId),
+            isNull(documents.deletedAt),
+            ne(documents.status, "deleted"),
+          ),
+        );
+      if (affectedRowCount(updated) === 0) {
+        await deleteRemoteDocument(deps, datasetId, ragflowDocumentId, () => {});
+        throw new IngestionSkipped("document_deleted");
+      }
       return "ready";
     }
 
@@ -217,17 +267,22 @@ async function pollUntilFinished(
       return "failed";
     }
 
-    await deps.db
+    const updated = await deps.db
       .update(documents)
       .set({ status: "parsing", errorMessage: null })
       .where(
         and(
           eq(documents.id, document.id),
           eq(documents.tenantId, document.tenantId),
+          isNull(documents.deletedAt),
           ne(documents.status, "ready"),
           ne(documents.status, "deleted"),
         ),
       );
+    if (affectedRowCount(updated) === 0) {
+      await deleteRemoteDocument(deps, datasetId, ragflowDocumentId, () => {});
+      throw new IngestionSkipped("document_deleted");
+    }
 
     await sleep(deps.config.pollIntervalMs);
   }
@@ -264,9 +319,35 @@ async function findKnowledgeBase(
   const rows = await db
     .select()
     .from(knowledgeBases)
-    .where(and(eq(knowledgeBases.id, knowledgeBaseId), eq(knowledgeBases.tenantId, tenantId)))
+    .where(
+      and(
+        eq(knowledgeBases.id, knowledgeBaseId),
+        eq(knowledgeBases.tenantId, tenantId),
+        isNull(knowledgeBases.deletedAt),
+      ),
+    )
     .limit(1);
   return rows[0] ?? null;
+}
+
+async function isDocumentActive(
+  db: Database,
+  tenantId: string,
+  documentId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: documents.id })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.id, documentId),
+        eq(documents.tenantId, tenantId),
+        isNull(documents.deletedAt),
+        ne(documents.status, "deleted"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 async function markFailed(db: Database, document: Document, message: string): Promise<void> {
@@ -276,7 +357,59 @@ async function markFailed(db: Database, document: Document, message: string): Pr
       status: "failed",
       errorMessage: message.slice(0, 500),
     })
-    .where(and(eq(documents.id, document.id), eq(documents.tenantId, document.tenantId)));
+    .where(
+      and(
+        eq(documents.id, document.id),
+        eq(documents.tenantId, document.tenantId),
+        isNull(documents.deletedAt),
+        ne(documents.status, "deleted"),
+      ),
+    );
+}
+
+function affectedRowCount(result: unknown): number {
+  if (Array.isArray(result)) {
+    const header = result[0];
+    if (header && typeof header === "object" && "affectedRows" in header) {
+      return Number((header as { affectedRows?: number }).affectedRows ?? 0);
+    }
+  }
+  return 0;
+}
+
+async function deleteRemoteDocument(
+  deps: IngestionDependencies,
+  datasetId: string,
+  ragflowDocumentId: string,
+  log: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  try {
+    await deps.client.deleteDocument(datasetId, ragflowDocumentId);
+    log({ event: "remote_document_cleaned", ragflowDocumentId });
+  } catch (cause) {
+    log({
+      event: "remote_document_cleanup_failed",
+      ragflowDocumentId,
+      reason: toErrorMessage(cause),
+    });
+  }
+}
+
+async function deleteRemoteDataset(
+  deps: IngestionDependencies,
+  datasetId: string,
+  log: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  try {
+    await deps.client.deleteDataset(datasetId);
+    log({ event: "remote_dataset_cleaned", datasetId });
+  } catch (cause) {
+    log({
+      event: "remote_dataset_cleanup_failed",
+      datasetId,
+      reason: toErrorMessage(cause),
+    });
+  }
 }
 
 function toErrorMessage(cause: unknown): string {

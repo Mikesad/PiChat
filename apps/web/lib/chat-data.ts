@@ -1,4 +1,6 @@
-export type ToolStatus = "running" | "done";
+import type { ChatCitation } from "@pichat/shared";
+
+export type ToolStatus = "running" | "done" | "error";
 
 export interface ToolCall {
   id: string;
@@ -8,18 +10,9 @@ export interface ToolCall {
   durationMs?: number;
 }
 
-export interface Citation {
-  id: string;
-  index: number;
-  documentId: string;
-  documentTitle: string;
-  knowledgeBaseId: string;
-  knowledgeBaseName: string;
-  chunkId: string;
-  snippet: string;
-}
+export type Citation = ChatCitation;
 
-export type MessageStatus = "thinking" | "streaming" | "done" | "stopped";
+export type MessageStatus = "thinking" | "streaming" | "done" | "stopped" | "error";
 
 export interface ChatMessage {
   id: string;
@@ -30,6 +23,7 @@ export interface ChatMessage {
   thinking?: string;
   tools?: ToolCall[];
   citations?: Citation[];
+  error?: string;
 }
 
 export interface Session {

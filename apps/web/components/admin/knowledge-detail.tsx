@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   type AclSubject,
@@ -14,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Icon, Spinner } from "../icons";
 import { IconButton } from "../ui";
-import { DocumentAclDrawer, SubjectSelect } from "./acl";
+import { BulkAclDrawer, DocumentAclDrawer, SubjectSelect } from "./acl";
 import { useAdminData } from "./admin-data";
 import { ConfirmDialog } from "./confirm-dialog";
 import { useNotImplemented } from "./not-implemented";
@@ -59,6 +60,7 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
   const { knowledgeBases, status, error, reload, reparseDocument } = useAdminData();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
+  const router = useRouter();
   const knowledgeBase = findKnowledgeBase(knowledgeBases, knowledgeBaseId);
   const [tab, setTab] = useState<TabId>("documents");
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -210,7 +212,9 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
         {tab === "access" ? (
           <AccessTab knowledgeBase={knowledgeBase} onOpenAcl={setAclDocumentId} />
         ) : null}
-        {tab === "settings" ? <SettingsTab knowledgeBase={knowledgeBase} /> : null}
+        {tab === "settings" ? (
+          <SettingsTab knowledgeBase={knowledgeBase} onDeleted={() => router.push("/knowledge")} />
+        ) : null}
       </div>
 
       {uploadOpen ? (
@@ -238,10 +242,16 @@ function DocumentsTab({
   onUpload: () => void;
   onRetry: (documentId: string) => void;
 }) {
-  const notifyNotImplemented = useNotImplemented();
+  const { deleteDocument, deleteDocuments } = useAdminData();
+  const { showToast } = useToast();
+  const handleApiError = useApiErrorHandler();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<AdminDocument | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkAclOpen, setBulkAclOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const normalized = query.trim().toLowerCase();
   const rows = knowledgeBase.documents.filter((document) => {
@@ -285,6 +295,47 @@ function DocumentsTab({
         ? [...new Set([...previous, ...visibleIds])]
         : previous.filter((id) => !visibleIds.includes(id)),
     );
+  }
+
+  async function handleDeleteDocument() {
+    if (!deleteTarget || deleting) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteDocument(deleteTarget.id);
+      setSelectedIds((previous) => previous.filter((id) => id !== deleteTarget.id));
+      setDeleteTarget(null);
+      showToast("文档已删除");
+    } catch (cause) {
+      await handleApiError(cause);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (deleting) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const result = await deleteDocuments(selectedIds);
+      if (result.failed.length > 0) {
+        showToast(
+          `已删除 ${result.deleted} 篇，${result.failed.length} 篇失败：${result.failed[0]?.message ?? ""}`,
+          "danger",
+        );
+      } else {
+        showToast(`已删除 ${result.deleted} 篇文档`);
+      }
+      setSelectedIds([]);
+      setBulkDeleteOpen(false);
+    } catch (cause) {
+      await handleApiError(cause);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -389,7 +440,7 @@ function DocumentsTab({
                     onToggle={(checked) => toggleOne(document.id, checked)}
                     onOpenAcl={() => onOpenAcl(document.id)}
                     onRetry={() => onRetry(document.id)}
-                    onDelete={() => notifyNotImplemented("删除文档")}
+                    onDelete={() => setDeleteTarget(document)}
                   />
                 ))}
               </tbody>
@@ -420,7 +471,7 @@ function DocumentsTab({
                 onToggle={(checked) => toggleOne(document.id, checked)}
                 onOpenAcl={() => onOpenAcl(document.id)}
                 onRetry={() => onRetry(document.id)}
-                onDelete={() => notifyNotImplemented("删除文档")}
+                onDelete={() => setDeleteTarget(document)}
               />
             ))}
           </ul>
@@ -430,15 +481,12 @@ function DocumentsTab({
       {knowledgeBase.canManageAcl && selectedIds.length > 0 ? (
         <div className="fixed inset-x-3 bottom-4 z-40 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-pop sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2">
           <p className="mr-auto text-xs font-medium text-fg">已选 {selectedIds.length} 篇</p>
-          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
+          <Button size="sm" variant="secondary" onClick={() => setBulkAclOpen(true)}>
             <Icon name="shield-check" size={13} />
-            授予读取
+            批量授权
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => notifyNotImplemented("批量授权")}>
-            <Icon name="ban" size={13} />
-            添加拒绝
-          </Button>
-          <Button size="sm" variant="danger" onClick={() => notifyNotImplemented("批量删除")}>
+          <Button size="sm" variant="danger" onClick={() => setBulkDeleteOpen(true)}>
+            <Icon name="trash" size={13} />
             删除
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>
@@ -450,6 +498,35 @@ function DocumentsTab({
       {knowledgeBase.canManageAcl && selectedIds.length > 0 ? (
         <div aria-hidden="true" className="h-16 sm:h-20" />
       ) : null}
+
+      {bulkAclOpen ? (
+        <BulkAclDrawer
+          knowledgeBaseId={knowledgeBase.id}
+          documentIds={selectedIds}
+          onClose={() => setBulkAclOpen(false)}
+          onApplied={() => setSelectedIds([])}
+        />
+      ) : null}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => void handleDeleteDocument()}
+        title="删除文档？"
+        description={`将删除「${deleteTarget?.title ?? ""}」及其全部文档例外，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。`}
+        confirmLabel={deleting ? "删除中…" : "删除文档"}
+        tone="danger"
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={() => void handleBulkDelete()}
+        title={`删除选中的 ${selectedIds.length} 篇文档？`}
+        description="将软删除这些文档及其全部文档例外，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。"
+        confirmLabel={deleting ? "删除中…" : "删除文档"}
+        tone="danger"
+      />
     </div>
   );
 }
@@ -856,11 +933,22 @@ function AccessTab({
   );
 }
 
-function SettingsTab({ knowledgeBase }: { knowledgeBase: AdminKnowledgeBase }) {
+function SettingsTab({
+  knowledgeBase,
+  onDeleted,
+}: {
+  knowledgeBase: AdminKnowledgeBase;
+  onDeleted: () => void;
+}) {
+  const { deleteKnowledgeBase } = useAdminData();
   const notifyNotImplemented = useNotImplemented();
+  const { showToast } = useToast();
+  const handleApiError = useApiErrorHandler();
   const [name, setName] = useState(knowledgeBase.name);
   const [description, setDescription] = useState(knowledgeBase.description);
   const [error, setError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const dirty = name !== knowledgeBase.name || description !== knowledgeBase.description;
 
@@ -871,6 +959,23 @@ function SettingsTab({ knowledgeBase }: { knowledgeBase: AdminKnowledgeBase }) {
     }
     setError(null);
     notifyNotImplemented("修改知识库设置");
+  }
+
+  async function handleDelete() {
+    if (deleting) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteKnowledgeBase(knowledgeBase.id);
+      showToast("知识库已删除");
+      setDeleteOpen(false);
+      onDeleted();
+    } catch (cause) {
+      await handleApiError(cause);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -953,7 +1058,7 @@ function SettingsTab({ knowledgeBase }: { knowledgeBase: AdminKnowledgeBase }) {
         </p>
         {knowledgeBase.canManageAcl ? (
           <div className="mt-3">
-            <Button variant="danger" onClick={() => notifyNotImplemented("删除知识库")}>
+            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
               <Icon name="trash" size={14} />
               删除知识库
             </Button>
@@ -962,6 +1067,17 @@ function SettingsTab({ knowledgeBase }: { knowledgeBase: AdminKnowledgeBase }) {
           <p className="mt-3 text-xs text-subtle">当前角色只读。</p>
         )}
       </div>
+
+      <ConfirmDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={() => void handleDelete()}
+        title="删除知识库？"
+        description={`将软删除「${knowledgeBase.name}」及其 ${knowledgeBase.documents.length} 篇文档、全部知识库默认权限与文档例外。RAGFlow 数据集和本地文件会尽力清理，失败会记录审计。`}
+        confirmLabel={deleting ? "删除中…" : "删除知识库"}
+        tone="danger"
+        requireText={knowledgeBase.name}
+      />
     </div>
   );
 }

@@ -215,7 +215,13 @@ export class AccessControlService {
     const rows = await this.db
       .select({ aclVersion: knowledgeBases.aclVersion })
       .from(knowledgeBases)
-      .where(and(eq(knowledgeBases.id, knowledgeBaseId), eq(knowledgeBases.tenantId, tenantId)))
+      .where(
+        and(
+          eq(knowledgeBases.id, knowledgeBaseId),
+          eq(knowledgeBases.tenantId, tenantId),
+          isNull(knowledgeBases.deletedAt),
+        ),
+      )
       .limit(1);
     return rows[0] ?? null;
   }

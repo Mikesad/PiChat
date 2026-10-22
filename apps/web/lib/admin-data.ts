@@ -767,7 +767,8 @@ export type AuditAction =
   | "document.upload"
   | "document.delete"
   | "document.reparse"
-  | "document.acl.update";
+  | "document.acl.update"
+  | "document.acl.batch_update";
 
 export type AuditResult = "success" | "denied" | "failed";
 
@@ -794,6 +795,7 @@ export const auditActionLabels: Record<AuditAction, string> = {
   "document.delete": "删除文档",
   "document.reparse": "重新解析文档",
   "document.acl.update": "更新文档权限",
+  "document.acl.batch_update": "批量更新文档权限",
 };
 
 export const auditResourceLabels: Record<AuditLogEntry["resourceType"], string> = {

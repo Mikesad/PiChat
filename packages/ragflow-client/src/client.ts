@@ -42,6 +42,20 @@ function listFromData<T>(data: unknown, keys: string[]): T[] {
 }
 
 export function toParseState(raw: RawRAGFlowDocument): RAGFlowParseState {
+  const ingestionStatus = raw.ingestion_status?.toUpperCase();
+  if (ingestionStatus === "COMPLETED") {
+    return "ready";
+  }
+  if (ingestionStatus === "FAILED" || ingestionStatus === "STOPPED") {
+    return "failed";
+  }
+  if (ingestionStatus === "RUNNING" || ingestionStatus === "STOPPING") {
+    return "parsing";
+  }
+  if (ingestionStatus === "CREATED" || ingestionStatus === "SCHEDULED") {
+    return "pending";
+  }
+
   const run = raw.run?.toUpperCase();
   if (run === "DONE") {
     return "ready";
@@ -73,7 +87,7 @@ function toDocument(raw: RawRAGFlowDocument): RAGFlowDocument {
     run: raw.run ?? null,
     progress: typeof raw.progress === "number" ? raw.progress : 0,
     state: toParseState(raw),
-    errorMessage: raw.run_error_msg ?? raw.message ?? null,
+    errorMessage: raw.run_error_msg ?? raw.progress_msg ?? raw.message ?? null,
   };
 }
 
@@ -162,20 +176,58 @@ export class RAGFlowClient {
   }
 
   async createDataset(input: CreateDatasetInput): Promise<RAGFlowDataset> {
-    const data = await this.request<RawRAGFlowDataset>("/api/v1/datasets", {
-      method: "POST",
-      body: JSON.stringify({
-        name: input.name,
-        embedding_model: input.embeddingModel,
-        chunk_method: input.chunkMethod ?? "naive",
-        ...(input.description ? { description: input.description } : {}),
-      }),
-    });
+    const base = {
+      name: input.name,
+      embedding_model: input.embeddingModel,
+    };
+    const parserId = input.chunkMethod ?? "naive";
+
+    let data: RawRAGFlowDataset;
+    try {
+      data = await this.request<RawRAGFlowDataset>("/api/v1/datasets", {
+        method: "POST",
+        body: JSON.stringify({
+          ...base,
+          parse_type: 1,
+          parser_id: parserId,
+        }),
+      });
+    } catch (cause) {
+      if (
+        cause instanceof RAGFlowError &&
+        /parse_type|parser_id|chunk_method/i.test(cause.message)
+      ) {
+        data = await this.request<RawRAGFlowDataset>("/api/v1/datasets", {
+          method: "POST",
+          body: JSON.stringify({
+            ...base,
+            chunk_method: parserId,
+          }),
+        });
+      } else {
+        throw cause;
+      }
+    }
+
     const dataset = toDataset(data ?? {});
     if (!dataset.id) {
       throw new RAGFlowError("RAGFlow did not return a dataset id", 200, -1);
     }
     return dataset;
+  }
+
+  async deleteDataset(datasetId: string): Promise<void> {
+    try {
+      await this.request<unknown>("/api/v1/datasets", {
+        method: "DELETE",
+        body: JSON.stringify({ ids: [datasetId] }),
+      });
+    } catch (cause) {
+      if (cause instanceof RAGFlowError && cause.status === 404) {
+        return;
+      }
+      throw cause;
+    }
   }
 
   async uploadDocument(datasetId: string, input: UploadDocumentInput): Promise<RAGFlowDocument> {
@@ -238,10 +290,17 @@ export class RAGFlowClient {
   }
 
   async deleteDocument(datasetId: string, documentId: string): Promise<void> {
-    await this.request<unknown>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/documents`, {
-      method: "DELETE",
-      body: JSON.stringify({ ids: [documentId] }),
-    });
+    try {
+      await this.request<unknown>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/documents`, {
+        method: "DELETE",
+        body: JSON.stringify({ ids: [documentId] }),
+      });
+    } catch (cause) {
+      if (cause instanceof RAGFlowError && cause.status === 404) {
+        return;
+      }
+      throw cause;
+    }
   }
 
   async retrieve(input: RetrievalInput): Promise<RetrievalChunk[]> {
