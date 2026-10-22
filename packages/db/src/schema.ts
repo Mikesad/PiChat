@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  double,
   index,
   int,
   json,
@@ -115,6 +116,9 @@ export const knowledgeBases = mysqlTable(
     description: text("description"),
     ragflowDatasetId: varchar("ragflow_dataset_id", { length: 64 }).notNull(),
     embeddingModel: varchar("embedding_model", { length: 120 }).notNull(),
+    retrievalTopK: int("retrieval_top_k").default(6).notNull(),
+    retrievalSimilarityThreshold: double("retrieval_similarity_threshold").default(0.2).notNull(),
+    retrievalVectorWeight: double("retrieval_vector_weight").default(0.3).notNull(),
     aclVersion: int("acl_version").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),

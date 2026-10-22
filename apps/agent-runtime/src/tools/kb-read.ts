@@ -78,7 +78,11 @@ export function createKbReadTool(context: ToolRuntimeContext) {
           datasetIds: [knowledgeBase.ragflowDatasetId],
           documentIds: [document.ragflowDocumentId],
           topK: 4,
-          similarityThreshold: context.config.search.similarityThreshold,
+          similarityThreshold:
+            knowledgeBase.retrieval?.similarityThreshold ??
+            context.config.search.similarityThreshold,
+          vectorSimilarityWeight:
+            knowledgeBase.retrieval?.vectorWeight ?? context.config.search.vectorWeight,
         });
       } catch (error) {
         if (error instanceof RAGFlowError) {

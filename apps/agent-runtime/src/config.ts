@@ -15,6 +15,7 @@ export interface RuntimeConfig {
     topK: number;
     maxTopK: number;
     similarityThreshold: number;
+    vectorWeight: number;
     maxSnippetChars: number;
     maxResultChars: number;
   };
@@ -53,6 +54,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       topK: numberFromEnv(env.KB_SEARCH_TOP_K, 6),
       maxTopK: numberFromEnv(env.KB_SEARCH_MAX_TOP_K, 12),
       similarityThreshold: Number(env.KB_SEARCH_SIMILARITY_THRESHOLD ?? "0.2"),
+      vectorWeight: Number(env.KB_SEARCH_VECTOR_WEIGHT ?? "0.3"),
       maxSnippetChars: numberFromEnv(env.KB_SEARCH_MAX_SNIPPET_CHARS, 1_200),
       maxResultChars: numberFromEnv(env.KB_SEARCH_MAX_RESULT_CHARS, 12_000),
     },

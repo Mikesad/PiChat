@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { mkdir, realpath, rm, stat } from "node:fs/promises";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { type Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import type { AccessPrincipal } from "@pichat/access-control";
 import {
   auditLogs,
   type Database,
@@ -34,6 +35,22 @@ export function canManageDocuments(role: string): boolean {
   return role === "tenant_admin" || role === "knowledge_admin";
 }
 
+function toAccessPrincipal(user: SessionUser): AccessPrincipal {
+  return {
+    tenantId: user.tenantId,
+    userId: user.id,
+    role: user.role,
+    groupIds: user.groupIds,
+  };
+}
+
+export interface DocumentContent {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  path: string;
+}
+
 export interface UploadedFileInput {
   fileName: string;
   mimeType: string;
@@ -54,6 +71,57 @@ export class DocumentsService {
 
   maxUploadBytes(): number {
     return resolveMaxUploadBytes(this.config.get<string>("UPLOAD_MAX_BYTES"));
+  }
+
+  async getContent(principal: SessionUser, documentId: string): Promise<DocumentContent> {
+    const rows = await this.db
+      .select({
+        id: documents.id,
+        title: documents.title,
+        sourceKey: documents.sourceKey,
+        mimeType: documents.mimeType,
+      })
+      .from(documents)
+      .innerJoin(knowledgeBases, eq(documents.knowledgeBaseId, knowledgeBases.id))
+      .where(
+        and(
+          eq(documents.id, documentId),
+          eq(documents.tenantId, principal.tenantId),
+          eq(knowledgeBases.tenantId, principal.tenantId),
+          isNull(documents.deletedAt),
+          ne(documents.status, "deleted"),
+          isNull(knowledgeBases.deletedAt),
+        ),
+      )
+      .limit(1);
+    const document = rows[0];
+    if (!document) {
+      throw notFound();
+    }
+
+    const decision = await this.accessControl.canRead(document.id, toAccessPrincipal(principal));
+    if (!decision?.allowed) {
+      throw notFound();
+    }
+
+    const root = this.uploadRoot();
+    const path = await this.resolveContentPath(root, document.sourceKey);
+    if (!path) {
+      throw notFound();
+    }
+
+    const file = await stat(path).catch(() => null);
+    if (!file?.isFile()) {
+      throw notFound();
+    }
+
+    const fileName = document.title.trim() || basename(path);
+    return {
+      fileName,
+      mimeType: previewMimeType(fileName, document.mimeType),
+      sizeBytes: file.size,
+      path,
+    };
   }
 
   async upload(
@@ -346,6 +414,18 @@ export class DocumentsService {
     return resolve(configured);
   }
 
+  private async resolveContentPath(root: string, sourceKey: string): Promise<string | null> {
+    try {
+      const [realRoot, realFile] = await Promise.all([
+        realpath(root),
+        realpath(resolve(sourceKey)),
+      ]);
+      return isInside(realRoot, realFile) ? realFile : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async removeDocumentDirectory(
     tenantId: string,
     knowledgeBaseId: string,
@@ -475,6 +555,21 @@ export class DocumentsService {
       createdAt: document.createdAt.toISOString(),
       updatedAt: document.updatedAt.toISOString(),
     };
+  }
+}
+
+function previewMimeType(fileName: string, stored: string | null): string {
+  switch (extname(fileName).toLowerCase()) {
+    case ".pdf":
+      return "application/pdf";
+    case ".docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".md":
+      return "text/markdown; charset=utf-8";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    default:
+      return stored && stored.length > 0 ? stored : "application/octet-stream";
   }
 }
 

@@ -1,20 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import type { MemberSummary } from "@pichat/shared";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AdminGroup,
   type AdminKnowledgeBase,
   type AdminUser,
-  activeGroupMembers,
-  findGroup,
-  groups,
-  lastActiveLabels,
   readableDocumentsFor,
   roleLabels,
   totalDocuments,
   type UserRole,
-  users,
 } from "@/lib/admin-data";
+import {
+  ApiError,
+  apiErrorMessage,
+  fetchMembers,
+  resetMemberPassword,
+  updateMember,
+} from "@/lib/api-client";
+import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
@@ -44,8 +48,41 @@ const roleTones: Record<UserRole, "neutral" | "accent" | "warning" | "success"> 
   tenant_admin: "success",
 };
 
+function toAdminUser(member: MemberSummary): AdminUser {
+  return {
+    id: member.id,
+    name: member.displayName,
+    email: member.email,
+    role: member.role,
+    groupIds: member.groupIds,
+    status: member.status,
+    lastActiveAt: member.lastActiveAt,
+  };
+}
+
+function formatLastActive(value: string | null | undefined): string {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  const now = new Date();
+  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (date.toDateString() === now.toDateString()) {
+    return `今天 ${time}`;
+  }
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
 export function MembersPage() {
   const { knowledgeBases } = useAdminData();
+  const { user: currentUser, logout } = useAuth();
+  const [members, setMembers] = useState<AdminUser[]>([]);
+  const [groups, setGroups] = useState<AdminGroup[]>([]);
+  const [directoryStatus, setDirectoryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [tab, setTab] = useState<DirectoryTab>("members");
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | UserRole>("all");
@@ -53,13 +90,40 @@ export function MembersPage() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
+  const reloadDirectory = useCallback(async () => {
+    setDirectoryStatus((current) => (current === "ready" ? "ready" : "loading"));
+    setDirectoryError(null);
+    try {
+      const response = await fetchMembers();
+      setMembers(response.members.map(toAdminUser));
+      setGroups(
+        response.groups.map((group) => ({
+          id: group.id,
+          name: group.name,
+          externalId: group.externalId ?? "",
+        })),
+      );
+      setDirectoryStatus("ready");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        await logout();
+      }
+      setDirectoryError(apiErrorMessage(cause));
+      setDirectoryStatus("error");
+    }
+  }, [logout]);
+
+  useEffect(() => {
+    void reloadDirectory();
+  }, [reloadDirectory]);
+
   const normalized = query.trim().toLowerCase();
   const totalDocs = totalDocuments(knowledgeBases);
-  const activeUsers = users.filter((user) => user.status === "active").length;
+  const activeUsers = members.filter((user) => user.status === "active").length;
 
   const filteredUsers = useMemo(
     () =>
-      users.filter((user) => {
+      members.filter((user) => {
         if (
           normalized &&
           !user.name.toLowerCase().includes(normalized) &&
@@ -75,7 +139,7 @@ export function MembersPage() {
         }
         return true;
       }),
-    [normalized, roleFilter, statusFilter],
+    [members, normalized, roleFilter, statusFilter],
   );
 
   const filteredGroups = useMemo(
@@ -86,10 +150,10 @@ export function MembersPage() {
           group.name.toLowerCase().includes(normalized) ||
           group.externalId.toLowerCase().includes(normalized),
       ),
-    [normalized],
+    [groups, normalized],
   );
 
-  const selectedUser = users.find((user) => user.id === selectedUserId);
+  const selectedUser = members.find((user) => user.id === selectedUserId);
   const selectedGroup = groups.find((group) => group.id === selectedGroupId);
 
   return (
@@ -97,32 +161,51 @@ export function MembersPage() {
       <PageHeader
         eyebrow="Directory"
         title="成员与组"
-        description="查看成员角色、用户组与文档访问范围。成员与用户组来自本地数据库，当前只读。"
+        description="查看并编辑成员角色、状态、用户组与文档访问范围。成员与用户组来自本地数据库。"
         actions={
           <Badge tone="neutral">
-            <Icon name="lock" size={12} />
-            本地数据 · 只读
+            <Icon name="database" size={12} />
+            本地 MySQL
           </Badge>
         }
       />
 
       <StatStrip
         items={[
-          { label: "成员总数", value: users.length, hint: "含停用账号" },
+          { label: "成员总数", value: members.length, hint: "含停用账号" },
           { label: "活跃成员", value: activeUsers, hint: "参与权限计算" },
           { label: "用户组", value: groups.length, hint: "本地数据库" },
-          { label: "数据来源", value: "本地 MySQL", hint: "当前只读" },
+          { label: "数据来源", value: "本地 MySQL", hint: "实时查询" },
         ]}
       />
 
-      <InfoBanner tone="neutral" icon="database" title="本地数据库成员，当前只读">
-        成员、用户组与角色来自本地数据库种子数据。成员/组查询 API
-        与角色编辑将在后续冲刺接入；此页的可读文档数为本地预览，不是服务端判定。
+      <InfoBanner tone="neutral" icon="database" title="本地数据库成员">
+        成员、用户组与角色来自本地
+        MySQL。租户管理员可编辑角色、状态与用户组，并可重置密码；此页的可读文档数为本地预览，不是服务端判定。
       </InfoBanner>
+
+      {directoryStatus === "loading" ? (
+        <div className="rounded-xl border border-border bg-surface px-4 py-6 text-sm text-muted">
+          正在加载成员…
+        </div>
+      ) : null}
+      {directoryStatus === "error" ? (
+        <div className="rounded-xl border border-danger/30 bg-danger-soft/40 px-4 py-4">
+          <p className="text-sm text-fg">成员加载失败：{directoryError}</p>
+          <Button
+            className="mt-2"
+            size="sm"
+            variant="secondary"
+            onClick={() => void reloadDirectory()}
+          >
+            重试
+          </Button>
+        </div>
+      ) : null}
 
       <Tabs
         items={[
-          { id: "members", label: "成员", count: users.length },
+          { id: "members", label: "成员", count: members.length },
           { id: "groups", label: "用户组", count: groups.length },
         ]}
         value={tab}
@@ -236,6 +319,7 @@ export function MembersPage() {
                       <MemberRow
                         key={user.id}
                         user={user}
+                        groups={groups}
                         knowledgeBases={knowledgeBases}
                         totalDocs={totalDocs}
                         onOpen={() => setSelectedUserId(user.id)}
@@ -250,6 +334,7 @@ export function MembersPage() {
                   <MemberCard
                     key={user.id}
                     user={user}
+                    groups={groups}
                     knowledgeBases={knowledgeBases}
                     totalDocs={totalDocs}
                     onOpen={() => setSelectedUserId(user.id)}
@@ -292,7 +377,7 @@ export function MembersPage() {
                   footer={
                     <>
                       <span>共 {filteredGroups.length} 个用户组</span>
-                      <span>本地数据库 · 只读</span>
+                      <span>本地数据库 · 实时查询</span>
                     </>
                   }
                 >
@@ -313,6 +398,7 @@ export function MembersPage() {
                       <GroupRow
                         key={group.id}
                         group={group}
+                        members={members}
                         onOpen={() => setSelectedGroupId(group.id)}
                       />
                     ))}
@@ -325,6 +411,7 @@ export function MembersPage() {
                   <GroupCard
                     key={group.id}
                     group={group}
+                    members={members}
                     onOpen={() => setSelectedGroupId(group.id)}
                   />
                 ))}
@@ -337,14 +424,23 @@ export function MembersPage() {
       {selectedUser ? (
         <MemberDrawer
           user={selectedUser}
+          groups={groups}
+          allMembers={members}
           knowledgeBases={knowledgeBases}
           totalDocs={totalDocs}
+          canEdit={currentUser?.role === "tenant_admin"}
+          isSelf={currentUser?.id === selectedUser.id}
+          onUpdated={reloadDirectory}
           onClose={() => setSelectedUserId(null)}
         />
       ) : null}
 
       {selectedGroup ? (
-        <GroupDrawer group={selectedGroup} onClose={() => setSelectedGroupId(null)} />
+        <GroupDrawer
+          group={selectedGroup}
+          members={members}
+          onClose={() => setSelectedGroupId(null)}
+        />
       ) : null}
     </div>
   );
@@ -352,17 +448,19 @@ export function MembersPage() {
 
 function MemberRow({
   user,
+  groups,
   knowledgeBases,
   totalDocs,
   onOpen,
 }: {
   user: AdminUser;
+  groups: AdminGroup[];
   knowledgeBases: AdminKnowledgeBase[];
   totalDocs: number;
   onOpen: () => void;
 }) {
   const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = findGroup(groupId);
+    const group = groups.find((item) => item.id === groupId);
     return group ? [group] : [];
   });
   const readable = readableDocumentsFor(user, knowledgeBases).length;
@@ -406,7 +504,7 @@ function MemberRow({
         <p className="mt-0.5 text-[11px] text-subtle">本地预览，非服务端判定</p>
       </td>
       <td className={tdClass}>
-        <p className="text-xs text-muted">{lastActiveLabels[user.id] ?? "—"}</p>
+        <p className="text-xs text-muted">{formatLastActive(user.lastActiveAt)}</p>
       </td>
       <td className={`${tdClass} text-right`}>
         <Button size="sm" variant="secondary" onClick={onOpen}>
@@ -419,17 +517,19 @@ function MemberRow({
 
 function MemberCard({
   user,
+  groups,
   knowledgeBases,
   totalDocs,
   onOpen,
 }: {
   user: AdminUser;
+  groups: AdminGroup[];
   knowledgeBases: AdminKnowledgeBase[];
   totalDocs: number;
   onOpen: () => void;
 }) {
   const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = findGroup(groupId);
+    const group = groups.find((item) => item.id === groupId);
     return group ? [group] : [];
   });
   const readable = readableDocumentsFor(user, knowledgeBases).length;
@@ -459,7 +559,7 @@ function MemberCard({
         <span className="text-fg">
           可读 {readable} / {totalDocs} 篇（本地预览）
         </span>
-        <span>最近活跃 {lastActiveLabels[user.id] ?? "—"}</span>
+        <span>最近活跃 {formatLastActive(user.lastActiveAt)}</span>
       </div>
       <div className="mt-3">
         <Button size="sm" variant="secondary" onClick={onOpen}>
@@ -470,8 +570,18 @@ function MemberCard({
   );
 }
 
-function GroupRow({ group, onOpen }: { group: AdminGroup; onOpen: () => void }) {
-  const members = activeGroupMembers(group.id);
+function GroupRow({
+  group,
+  members,
+  onOpen,
+}: {
+  group: AdminGroup;
+  members: AdminUser[];
+  onOpen: () => void;
+}) {
+  const groupMembers = members.filter(
+    (member) => member.status === "active" && member.groupIds.includes(group.id),
+  );
   return (
     <tr className={trClass}>
       <td className={tdClass}>
@@ -486,18 +596,18 @@ function GroupRow({ group, onOpen }: { group: AdminGroup; onOpen: () => void }) 
         <p className="font-mono text-[11px] text-muted">{group.externalId}</p>
       </td>
       <td className={tdClass}>
-        <p className="text-sm tabular-nums text-fg">{members.length} 人</p>
+        <p className="text-sm tabular-nums text-fg">{groupMembers.length} 人</p>
       </td>
       <td className={tdClass}>
-        {members.length === 0 ? (
+        {groupMembers.length === 0 ? (
           <span className="text-[11px] text-warning">暂无成员</span>
         ) : (
           <p className="max-w-[240px] truncate text-xs text-muted">
-            {members
+            {groupMembers
               .slice(0, 3)
               .map((member) => member.name)
               .join("、")}
-            {members.length > 3 ? ` 等 ${members.length} 人` : ""}
+            {groupMembers.length > 3 ? ` 等 ${groupMembers.length} 人` : ""}
           </p>
         )}
       </td>
@@ -516,8 +626,18 @@ function GroupRow({ group, onOpen }: { group: AdminGroup; onOpen: () => void }) 
   );
 }
 
-function GroupCard({ group, onOpen }: { group: AdminGroup; onOpen: () => void }) {
-  const members = activeGroupMembers(group.id);
+function GroupCard({
+  group,
+  members,
+  onOpen,
+}: {
+  group: AdminGroup;
+  members: AdminUser[];
+  onOpen: () => void;
+}) {
+  const groupMembers = members.filter(
+    (member) => member.status === "active" && member.groupIds.includes(group.id),
+  );
   return (
     <li className="rounded-xl border border-border bg-surface p-3.5">
       <div className="flex items-start gap-2.5">
@@ -531,12 +651,12 @@ function GroupCard({ group, onOpen }: { group: AdminGroup; onOpen: () => void })
         <Badge tone="neutral">本地</Badge>
       </div>
       <p className="mt-2.5 text-[11px] text-subtle">
-        {members.length} 人 ·{" "}
-        {members
+        {groupMembers.length} 人 ·{" "}
+        {groupMembers
           .slice(0, 3)
           .map((member) => member.name)
           .join("、")}
-        {members.length > 3 ? " 等" : ""}
+        {groupMembers.length > 3 ? " 等" : ""}
       </p>
       <div className="mt-3">
         <Button size="sm" variant="secondary" onClick={onOpen}>
@@ -549,20 +669,98 @@ function GroupCard({ group, onOpen }: { group: AdminGroup; onOpen: () => void })
 
 function MemberDrawer({
   user,
+  groups,
+  allMembers,
   knowledgeBases,
   totalDocs,
+  canEdit,
+  isSelf,
+  onUpdated,
   onClose,
 }: {
   user: AdminUser;
+  groups: AdminGroup[];
+  allMembers: AdminUser[];
   knowledgeBases: AdminKnowledgeBase[];
   totalDocs: number;
+  canEdit: boolean;
+  isSelf: boolean;
+  onUpdated: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [role, setRole] = useState<UserRole>(user.role);
+  const [status, setStatus] = useState<"active" | "disabled">(user.status);
+  const [groupIds, setGroupIds] = useState<string[]>(user.groupIds);
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRole(user.role);
+    setStatus(user.status);
+    setGroupIds(user.groupIds);
+    setPassword("");
+    setError(null);
+    setNotice(null);
+  }, [user]);
+
   const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = findGroup(groupId);
+    const group = groups.find((item) => item.id === groupId);
     return group ? [group] : [];
   });
   const readable = readableDocumentsFor(user, knowledgeBases).length;
+  const dirty =
+    role !== user.role ||
+    status !== user.status ||
+    [...groupIds].sort().join(",") !== [...user.groupIds].sort().join(",");
+
+  async function handleSave() {
+    if (!canEdit) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await updateMember(user.id, { role, status, groupIds });
+      await onUpdated();
+      setNotice("成员信息已保存");
+    } catch (cause) {
+      setError(apiErrorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    if (!canEdit) {
+      return;
+    }
+    if (password.length < 6) {
+      setError("密码至少需要 6 个字符");
+      return;
+    }
+    setResetting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await resetMemberPassword(user.id, password);
+      setPassword("");
+      setNotice("密码已重置，该成员现有会话已失效");
+    } catch (cause) {
+      setError(apiErrorMessage(cause));
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  function toggleGroup(groupId: string) {
+    setGroupIds((current) =>
+      current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId],
+    );
+  }
 
   return (
     <Drawer
@@ -571,10 +769,15 @@ function MemberDrawer({
       title={user.name}
       description={`${user.email} · 本地数据库`}
       footer={
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             关闭
           </Button>
+          {canEdit ? (
+            <Button onClick={() => void handleSave()} disabled={!dirty || saving}>
+              {saving ? "保存中…" : "保存"}
+            </Button>
+          ) : null}
         </div>
       }
     >
@@ -592,28 +795,84 @@ function MemberDrawer({
         </div>
       </div>
 
+      {error ? (
+        <p className="mt-3 rounded-lg border border-danger/30 bg-danger-soft/40 px-3 py-2 text-xs text-danger">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="mt-3 rounded-lg border border-success/30 bg-success-soft/40 px-3 py-2 text-xs text-success">
+          {notice}
+        </p>
+      ) : null}
+
+      <section className="mt-4">
+        <h3 className="text-xs font-medium text-fg">角色与状态</h3>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1 text-[11px] text-subtle">
+            角色
+            <select
+              value={role}
+              onChange={(event) => setRole(event.target.value as UserRole)}
+              disabled={!canEdit || isSelf}
+              className="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent"
+            >
+              {(Object.keys(roleLabels) as UserRole[]).map((item) => (
+                <option key={item} value={item}>
+                  {roleLabels[item]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-[11px] text-subtle">
+            状态
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as "active" | "disabled")}
+              disabled={!canEdit || isSelf}
+              className="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent"
+            >
+              <option value="active">活跃</option>
+              <option value="disabled">停用</option>
+            </select>
+          </label>
+        </div>
+        {isSelf ? <p className="mt-2 text-[11px] text-subtle">不能修改自己的角色或状态。</p> : null}
+      </section>
+
       <section className="mt-4">
         <h3 className="text-xs font-medium text-fg">用户组</h3>
-        <p className="mt-1 text-[11px] text-subtle">用户组来自本地数据库，当前只读。</p>
-        {memberGroups.length === 0 ? (
+        <p className="mt-1 text-[11px] text-subtle">勾选后整体替换该成员的用户组。</p>
+        {groups.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-subtle">
-            未加入任何用户组。
+            当前租户没有用户组。
           </p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
-            {memberGroups.map((group) => (
-              <li
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            {groups.map((group) => (
+              <label
                 key={group.id}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2"
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-fg"
               >
-                <Icon name="users" size={14} className="shrink-0 text-subtle" />
-                <span className="min-w-0 flex-1 truncate text-sm text-fg">{group.name}</span>
+                <input
+                  type="checkbox"
+                  checked={groupIds.includes(group.id)}
+                  onChange={() => toggleGroup(group.id)}
+                  disabled={!canEdit}
+                  className="size-4 accent-[var(--accent)]"
+                />
+                <span className="min-w-0 flex-1 truncate">{group.name}</span>
                 <span className="shrink-0 text-[11px] text-subtle">
-                  {activeGroupMembers(group.id).length} 人
+                  {
+                    allMembers.filter(
+                      (member) => member.status === "active" && member.groupIds.includes(group.id),
+                    ).length
+                  }{" "}
+                  人
                 </span>
-              </li>
+              </label>
             ))}
-          </ul>
+          </div>
         )}
       </section>
 
@@ -624,8 +883,7 @@ function MemberDrawer({
             可读 {readable} / {totalDocs} 篇文档
           </p>
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            本地预览：基于当前页面可见文档与种子成员快照计算，不是服务端按成员判定。成员 API
-            接入后替换。
+            本地预览：基于当前页面可见文档与该成员的用户组计算，不是服务端按成员逐篇判定。
           </p>
           <div className="mt-2">
             <LinkButton href="/permissions" size="sm">
@@ -636,6 +894,35 @@ function MemberDrawer({
         </div>
       </section>
 
+      {canEdit ? (
+        <section className="mt-4">
+          <h3 className="text-xs font-medium text-fg">重置密码</h3>
+          <p className="mt-1 text-[11px] text-subtle">
+            重置后该成员的所有登录会话会立即失效。当前账号密码不会显示。
+          </p>
+          <div className="mt-2 flex gap-2">
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setError(null);
+              }}
+              placeholder="至少 6 个字符"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void handleResetPassword()}
+              disabled={resetting || password.length < 6}
+            >
+              {resetting ? "重置中…" : "重置密码"}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
       <section className="mt-4">
         <h3 className="text-xs font-medium text-fg">数据来源</h3>
         <dl className="mt-2 grid gap-2 text-xs">
@@ -644,27 +931,31 @@ function MemberDrawer({
             <dd className="text-fg">本地 MySQL</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">成员 API</dt>
-            <dd className="text-fg">下一冲刺接入</dd>
+            <dt className="text-subtle">最近活跃</dt>
+            <dd className="text-fg">{formatLastActive(user.lastActiveAt)}</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">最近活跃（示例）</dt>
-            <dd className="text-fg">{lastActiveLabels[user.id] ?? "—"}</dd>
+            <dt className="text-subtle">用户组</dt>
+            <dd className="text-fg">{memberGroups.length} 个</dd>
           </div>
         </dl>
       </section>
-
-      <div className="mt-4">
-        <InfoBanner tone="neutral" icon="lock" title="只读">
-          成员、用户组与角色来自本地数据库，当前只读；角色编辑与密码重置将在后续开放。
-        </InfoBanner>
-      </div>
     </Drawer>
   );
 }
 
-function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => void }) {
-  const members = activeGroupMembers(group.id);
+function GroupDrawer({
+  group,
+  members,
+  onClose,
+}: {
+  group: AdminGroup;
+  members: AdminUser[];
+  onClose: () => void;
+}) {
+  const groupMembers = members.filter(
+    (member) => member.status === "active" && member.groupIds.includes(group.id),
+  );
   return (
     <Drawer
       open
@@ -680,7 +971,7 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
       }
     >
       <div className="rounded-xl border border-border bg-surface-2/60 p-4">
-        <p className="text-sm font-medium text-fg">{members.length} 名活跃成员</p>
+        <p className="text-sm font-medium text-fg">{groupMembers.length} 名活跃成员</p>
         <p className="mt-1 text-[11px] leading-5 text-subtle">
           用户组来自本地数据库。文档权限在“文档权限”中按文档配置，用户组本身不直接授予访问。
         </p>
@@ -694,13 +985,13 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
 
       <section className="mt-4">
         <h3 className="text-xs font-medium text-fg">成员</h3>
-        {members.length === 0 ? (
+        {groupMembers.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-warning/40 bg-warning-soft px-3 py-2.5 text-xs text-warning">
             该用户组暂无活跃成员。绑定到文档的读取或拒绝规则暂时不会影响任何人。
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
-            {members.map((member) => (
+            {groupMembers.map((member) => (
               <li
                 key={member.id}
                 className="flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2"
@@ -726,7 +1017,7 @@ function GroupDrawer({ group, onClose }: { group: AdminGroup; onClose: () => voi
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-subtle">来源</dt>
-            <dd className="text-fg">本地 MySQL · 只读</dd>
+            <dd className="text-fg">本地 MySQL</dd>
           </div>
         </dl>
       </section>

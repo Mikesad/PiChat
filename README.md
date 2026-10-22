@@ -6,7 +6,7 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 
 ## 当前状态
 
-第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。任务 C 已完成：用户级模型配置加密 API + Web 接真；文档上传、BullMQ 入队、Worker 上传 RAGFlow 并轮询解析状态、失败重试与 Web 状态刷新。任务 D 已完成：Agent Runtime 接入 prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话；业务 API 新增 chat 会话/消息/SSE 代理与 MySQL 落库；Web 对话页接真。任务 E 已完成：同步创建知识库（先建 RAGFlow dataset）、知识库软删除、文档软删除与本地/RAGFlow/队列清理、同库多文档批量授权。当前本机 Redis/RAGFlow 不可用，真实检索/解析 E2E 未执行；成员编辑和审计查询尚未开始。
+第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。任务 C 已完成：用户级模型配置加密 API + Web 接真；文档上传、BullMQ 入队、Worker 上传 RAGFlow 并轮询解析状态、失败重试与 Web 状态刷新。任务 D 已完成：Agent Runtime 接入 prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话；业务 API 新增 chat 会话/消息/SSE 代理与 MySQL 落库；Web 对话页接真。任务 E 已完成：同步创建知识库（先建 RAGFlow dataset）、知识库软删除、文档软删除与本地/RAGFlow/队列清理、同库多文档批量授权。文档在线预览已完成：内容 API 做 ACL/租户/软删除校验，BFF 透传 Range，知识库详情页与聊天「引用与来源」均可打开 PDF/DOCX/MD/TXT 弹窗预览。当前本机 MySQL、Redis、RAGFlow 均已可达，API/Runtime/Worker 启动冒烟通过；真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证；预览 API/BFF 的 200/206/416/401/404 已验证，Chrome headless 已验证 MD/TXT/DOCX 弹窗渲染与 PDF iframe 加载；`model_configs` 为空，Agent + 真实 LLM 的回答/引用 E2E 待配置模型后执行。任务 F 已完成：成员/用户组查询与编辑、密码重置、审计查询 API + 审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime；RAGFlow 解析配置（chunk 大小/方法）仍待排期。
 
 已实现：
 
@@ -16,26 +16,27 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 - Web BFF：登录、登出、me、知识库/文档/ACL、chat SSE 请求统一转发，浏览器不直连 API/RAGFlow
 - 知识库管理 UI：列表、详情、文档状态、默认访问范围、设置；创建、删除、文档删除、批量授权与 ACL 读写已接真实 API
 - 文档权限 UI：ACL 抽屉、有效人数、访问检查、多选批量授权；有效人数与访问判定来自服务端，批量授权要求同一知识库
-- 成员与组 UI：本地数据库只读成员/用户组、详情抽屉（仍为 mock 数据）
-- 审计日志 UI：事件流、筛选、详情（页面仍为 mock；ACL 变更已真实写入 `audit_logs`）
+- 成员与组 UI：真实 `GET /api/members` 成员/用户组与最近活跃；`tenant_admin` 可编辑角色、状态、用户组并重置密码
+- 审计日志 UI：真实 `GET /api/audit-logs` 事件流、筛选、详情（actor、资源标题与 metadata 来自服务端）
 - 模型配置 UI：OpenCode Go / DeepSeek 官方；配置按用户保存在服务端，API Key 使用 AES-256-GCM 加密，浏览器只拿脱敏值
 - 文档上传 UI：真实 multipart 上传、逐文件状态、每 3 秒轮询 `pending`/`parsing`、失败文档重新解析
-- NestJS + Fastify API：认证、知识库、文档上传/重试、ACL、访问检查、用户级模型配置、chat 会话/消息/SSE、内部 ACL 接口
+- 文档在线预览：知识库详情页与聊天引用共用弹窗，预览 PDF/DOCX/MD/TXT；内容接口校验 ACL/租户/软删除与路径边界，支持单段 Range
+- NestJS + Fastify API：认证、知识库（含设置与检索参数）、文档上传/重试/内容预览、ACL、访问检查、成员与用户组、审计查询、用户级模型配置、chat 会话/消息/SSE、内部 ACL 接口
 - Agent Runtime：Pi Agent Loop、SSE、`kb_search` / `kb_read`、ACL scope/复核、Pi JSONL 会话、per-run 临时模型 Key
 - MySQL 8 Schema 与迁移：租户、用户、组、知识库、文档、ACL、会话、消息、审计、模型配置
 - 可重复 seed：1 租户、14 用户、6 组、4 知识库、16 文档，密码 `123456`
 - 文档 ACL 策略：知识库默认 + 文档例外、deny 优先、`tenant_admin` 覆盖；16 个单测
 - 知识库生命周期：同步创建 RAGFlow dataset；知识库/文档软删除；批量整体替换文档例外；审计与 ACL 缓存失效
-- 测试：ACL 16、API 48、Runtime 5、Shared 3、Worker 10、RAGFlow client 7，共 89 个
+- 测试：ACL 16、API 67、Runtime 6、Shared 3、Worker 10、RAGFlow client 7，共 109 个
 - `packages/queue`：统一队列名、Job 类型、确定性 jobId 与 Redis 连接参数；Worker 接通 RAGFlow 上传/解析轮询
 - RAGFlow 客户端（含 dataset/document 删除与 404 幂等）、共享 SSE 协议与解析器、ADR
 
 尚未实现：
 
-- 真实 RAGFlow 上传/解析/检索 E2E（本机 Redis 与 RAGFlow 不可用；代码和测试已完成）
+- Agent + 真实 LLM 的完整 RAG 回答/引用 E2E（RAGFlow 四格式解析/检索已通过，待配置模型）
 - 真实 RAGFlow 检索下的人工 abort/retry/JSONL 续聊验收
-- 本地成员/组编辑、密码重置、审计查询 API 与审计页接真
-- 知识库设置修改（名称/描述）
+- RAGFlow 解析配置（chunk 大小/切分方法）修改与批量重新解析
+- 用户组增删改（当前只支持通过成员编辑替换所属用户组）
 - 生产硬化：CSRF、限流、日志、部署
 - MCP / CLI / 多租户 SaaS
 
@@ -172,7 +173,7 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 
 任务 C + D + E 使用 Node 22.23.3 + 本机 MySQL 验证通过：
 
-- `pnpm test`：89 个测试通过（ACL 16 + API 48 + Runtime 5 + Shared 3 + Worker 10 + RAGFlow client 7）
+- `pnpm test`：95 个测试通过（ACL 16 + API 54 + Runtime 5 + Shared 3 + Worker 10 + RAGFlow client 7）
 - `pnpm typecheck`：9 个 workspace 包全部通过（Turbo `--concurrency=1`）
 - `pnpm lint`：9 个 workspace 包全部通过
 - `pnpm build`：Web、API、Runtime、Worker 与共享包全部通过
@@ -184,13 +185,16 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 - 模型配置 HTTP 验证：创建/列表/更新省略 Key/设为默认/删除；响应不含明文或密文字段
 - Web BFF 验证：登录、模型配置增删查、multipart 上传转发、chat SSE 透传
 - Redis 未启动时上传返回 `503 service_unavailable`，文档保留为 `failed`；非法扩展名返回 `400`
-- 真实 RAGFlow 检索/解析未验证：本机 6379/9380 不可达，`RAGFLOW_API_KEY` 为空、`RAGFLOW_DEFAULT_EMBEDDING_MODEL` 未配置
+- 真实 RAGFlow E2E：临时知识库上传 MD/TXT/PDF/DOCX，四篇均 `ready`；RAGFlow retrieval `code=0`，四个唯一口令全部命中；删除 204 且 dataset 已清理
+- 真实 ACL：临时 deny 后王芳从 allowed 变为 `explicit_deny`，内部 scope 立即不含该文档；随后恢复原例外
+- 启动冒烟：API `/api/health` 200、Runtime `/internal/health` 200、内部接口无 secret 401、Worker 输出 `worker_started`
+- Agent + 真实 LLM 回答/引用未验证：`model_configs` 为 0，需先配置真实模型；登录流程不作为本次验收重点
 
 UI 视觉、响应式、明暗主题、abort/retry、Runtime 重启后续聊仍待人工验收。`pnpm check` 目前会对 `packages/db/drizzle/meta/*.json` 报 Biome 格式差异，`pnpm lint` 通过。
 
 ## 下一步
 
-1. 配置 Redis 7 与可用 RAGFlow（API Key、embedding 模型），补真实上传 → `pending → parsing → ready` E2E。
-2. 补真实 `kb_search` → 回答 → 引用 E2E，并人工验收 abort/retry、引用展示前复核、JSONL 续聊。
-3. 本地成员/组编辑、密码重置、审计查询 API 与审计页接真。
+1. 在 UI 配置真实模型并设为默认，补 Agent + LLM 的 `kb_search` → 回答 → 引用 E2E。
+2. 人工验收 abort/retry、引用展示前复核、JSONL 续聊与批量授权/删除 UI。
+3. RAGFlow 解析配置（chunk 大小/切分方法）修改与批量重新解析。
 4. 生产硬化：CSRF、限流、日志、迁移与部署。

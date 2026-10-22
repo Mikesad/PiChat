@@ -59,6 +59,9 @@ export interface KnowledgeBaseSummary {
   description: string | null;
   embeddingModel: string;
   ragflowDatasetId: string;
+  retrievalTopK: number;
+  retrievalSimilarityThreshold: number;
+  retrievalVectorWeight: number;
   aclVersion: number;
   defaultSubjects: AclSubject[];
   documentCount: number;
@@ -101,6 +104,76 @@ export interface KnowledgeBaseListResponse {
 
 export interface KnowledgeBaseResponse {
   knowledgeBase: KnowledgeBaseSummary;
+}
+
+export interface UpdateKnowledgeBaseRequest {
+  name?: string;
+  description?: string;
+  retrievalTopK?: number;
+  retrievalSimilarityThreshold?: number;
+  retrievalVectorWeight?: number;
+}
+
+export interface UpdateKnowledgeBaseResponse {
+  knowledgeBase: KnowledgeBaseSummary;
+}
+
+export interface MemberSummary {
+  id: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  status: "active" | "disabled";
+  groupIds: string[];
+  lastActiveAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GroupSummary {
+  id: string;
+  name: string;
+  externalId: string | null;
+  memberCount: number;
+}
+
+export interface MemberListResponse {
+  members: MemberSummary[];
+  groups: GroupSummary[];
+}
+
+export interface MemberResponse {
+  member: MemberSummary;
+}
+
+export interface UpdateMemberRequest {
+  role?: UserRole;
+  status?: "active" | "disabled";
+  groupIds?: string[];
+}
+
+export interface ResetMemberPasswordRequest {
+  password: string;
+}
+
+export type AuditResult = "success" | "denied" | "failed";
+
+export interface AuditLogSummary {
+  id: string;
+  actorId: string | null;
+  actorName: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  resourceLabel: string | null;
+  result: AuditResult;
+  summary: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface AuditLogListResponse {
+  logs: AuditLogSummary[];
 }
 
 export interface DocumentListResponse {

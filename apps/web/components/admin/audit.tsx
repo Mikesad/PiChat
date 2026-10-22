@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import type { AuditLogSummary } from "@pichat/shared";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AuditAction,
   type AuditLogEntry,
@@ -8,11 +9,10 @@ import {
   auditActionLabels,
   auditResourceLabels,
   auditResultLabels,
-  findUser,
-  roleLabels,
 } from "@/lib/admin-data";
+import { ApiError, apiErrorMessage, fetchAuditLogs } from "@/lib/api-client";
+import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
-import { useAdminData } from "./admin-data";
 import { Drawer } from "./drawer";
 import {
   Badge,
@@ -28,6 +28,73 @@ import {
   trClass,
 } from "./ui";
 
+const metadataLabels: Record<string, string> = {
+  name: "名称",
+  changes: "变更字段",
+  before: "变更前",
+  after: "变更后",
+  retrieval: "检索参数",
+  aclVersion: "ACL 版本",
+  documentIds: "文档",
+  ragflowDatasetId: "数据集",
+  embeddingModel: "Embedding",
+  localCleanup: "本地清理",
+  remoteCleanup: "RAGFlow 清理",
+};
+
+function formatAuditTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const now = new Date();
+  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (date.toDateString() === now.toDateString()) {
+    return `今天 ${time}`;
+  }
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+function formatMetadataValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function toAuditEntry(log: AuditLogSummary): AuditLogEntry {
+  return {
+    id: log.id,
+    at: log.createdAt,
+    atLabel: formatAuditTime(log.createdAt),
+    actorId: log.actorId ?? "",
+    actorName: log.actorName ?? "未知操作者",
+    action: log.action as AuditAction,
+    resourceType: log.resourceType as AuditLogEntry["resourceType"],
+    resourceId: log.resourceId ?? "",
+    resourceLabel: log.resourceLabel ?? "—",
+    result: log.result,
+    summary: log.summary,
+    metadata: Object.entries(log.metadata ?? {})
+      .filter(([key]) => key !== "actorId" && key !== "result")
+      .map(([key, value]) => ({
+        label: metadataLabels[key] ?? key,
+        value: formatMetadataValue(value),
+      })),
+  };
+}
+
+function actionLabelOf(action: string): string {
+  return (auditActionLabels as Record<string, string>)[action] ?? action;
+}
+
+function resourceLabelOf(resourceType: string): string {
+  return (auditResourceLabels as Record<string, string>)[resourceType] ?? resourceType;
+}
+
 const resultTones: Record<AuditResult, "success" | "warning" | "danger"> = {
   success: "success",
   denied: "warning",
@@ -41,22 +108,44 @@ const resultBannerTones: Record<AuditResult, "accent" | "warning" | "danger"> = 
 };
 
 export function AuditPage() {
-  const { auditLogs } = useAdminData();
+  const { logout } = useAuth();
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [actionFilter, setActionFilter] = useState<"all" | AuditAction>("all");
   const [resultFilter, setResultFilter] = useState<"all" | AuditResult>("all");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
 
+  const reload = useCallback(async () => {
+    setStatus((current) => (current === "ready" ? "ready" : "loading"));
+    setLoadError(null);
+    try {
+      const response = await fetchAuditLogs({ limit: 200 });
+      setAuditLogs(response.logs.map(toAuditEntry));
+      setStatus("ready");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        await logout();
+      }
+      setLoadError(apiErrorMessage(cause));
+      setStatus("error");
+    }
+  }, [logout]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
   const normalized = query.trim().toLowerCase();
   const filteredLogs = useMemo(
     () =>
       auditLogs.filter((log) => {
-        const actor = findUser(log.actorId);
         if (
           normalized &&
           !log.resourceLabel.toLowerCase().includes(normalized) &&
           !log.summary.toLowerCase().includes(normalized) &&
-          !(actor?.name.toLowerCase().includes(normalized) ?? false)
+          !(log.actorName?.toLowerCase().includes(normalized) ?? false)
         ) {
           return false;
         }
@@ -94,11 +183,11 @@ export function AuditPage() {
       <PageHeader
         eyebrow="Audit"
         title="审计日志"
-        description="记录权限、知识库与文档管理的变更。当前展示静态示例数据，审计查询 API 将在下一冲刺接入。"
+        description="记录权限、知识库、文档与成员管理的变更，数据来自服务端 audit_logs。"
         actions={
           <Badge tone="outline">
             <Icon name="lock" size={11} />
-            只读示例
+            只读
           </Badge>
         }
       />
@@ -117,10 +206,23 @@ export function AuditPage() {
         ]}
       />
 
-      <InfoBanner tone="neutral" icon="clipboard" title="静态示例审计流">
-        当前事件为静态示例，不代表本轮 ACL 操作已被记录。服务端已在本轮写入 audit_logs；审计查询 API
-        与审计页接真将在下一冲刺完成。
+      <InfoBanner tone="neutral" icon="clipboard" title="服务端审计流">
+        事件来自 MySQL audit_logs，最多加载最近 200 条；筛选在本地完成。审计事件只读，不可修改。
       </InfoBanner>
+
+      {status === "loading" ? (
+        <div className="rounded-xl border border-border bg-surface px-4 py-6 text-sm text-muted">
+          正在加载审计日志…
+        </div>
+      ) : null}
+      {status === "error" ? (
+        <div className="rounded-xl border border-danger/30 bg-danger-soft/40 px-4 py-4">
+          <p className="text-sm text-fg">审计日志加载失败：{loadError}</p>
+          <Button className="mt-2" size="sm" variant="secondary" onClick={() => void reload()}>
+            重试
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput
@@ -202,7 +304,7 @@ export function AuditPage() {
               footer={
                 <>
                   <span>共 {filteredLogs.length} 条事件</span>
-                  <span>按时间倒序 · 只读</span>
+                  <span>按时间倒序 · 最近 200 条</span>
                 </>
               }
             >
@@ -242,23 +344,22 @@ export function AuditPage() {
 }
 
 function AuditRow({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) {
-  const actor = findUser(log.actorId);
   return (
     <tr className={trClass}>
       <td className={tdClass}>
         <p className="text-xs text-muted">{log.atLabel}</p>
       </td>
       <td className={tdClass}>
-        <p className="text-sm text-fg">{actor?.name ?? "未知操作者"}</p>
-        <p className="mt-0.5 text-[11px] text-subtle">{actor ? roleLabels[actor.role] : "—"}</p>
+        <p className="text-sm text-fg">{log.actorName ?? "未知操作者"}</p>
+        <p className="mt-0.5 text-[11px] text-subtle">本地账号</p>
       </td>
       <td className={tdClass}>
-        <p className="text-sm text-fg">{auditActionLabels[log.action]}</p>
+        <p className="text-sm text-fg">{actionLabelOf(log.action)}</p>
         <p className="mt-0.5 font-mono text-[10px] text-subtle">{log.action}</p>
       </td>
       <td className={tdClass}>
         <p className="max-w-[260px] truncate text-sm text-fg">{log.resourceLabel}</p>
-        <p className="mt-0.5 text-[11px] text-subtle">{auditResourceLabels[log.resourceType]}</p>
+        <p className="mt-0.5 text-[11px] text-subtle">{resourceLabelOf(log.resourceType)}</p>
       </td>
       <td className={tdClass}>
         <Badge tone={resultTones[log.result]}>{auditResultLabels[log.result]}</Badge>
@@ -273,7 +374,6 @@ function AuditRow({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) {
 }
 
 function AuditCard({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) {
-  const actor = findUser(log.actorId);
   return (
     <li className="rounded-xl border border-border bg-surface p-3.5">
       <div className="flex items-start gap-2.5">
@@ -281,7 +381,7 @@ function AuditCard({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) 
           <Icon name="clipboard" size={15} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-fg">{auditActionLabels[log.action]}</p>
+          <p className="text-sm font-medium text-fg">{actionLabelOf(log.action)}</p>
           <p className="mt-0.5 truncate text-[11px] text-subtle">{log.resourceLabel}</p>
         </div>
         <Badge tone={resultTones[log.result]}>{auditResultLabels[log.result]}</Badge>
@@ -289,8 +389,8 @@ function AuditCard({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) 
       <p className="mt-2 text-[11px] leading-5 text-muted">{log.summary}</p>
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
         <span>{log.atLabel}</span>
-        <span>{actor?.name ?? "未知操作者"}</span>
-        <span>{auditResourceLabels[log.resourceType]}</span>
+        <span>{log.actorName ?? "未知操作者"}</span>
+        <span>{resourceLabelOf(log.resourceType)}</span>
       </div>
       <div className="mt-3">
         <Button size="sm" variant="secondary" onClick={onOpen}>
@@ -302,13 +402,12 @@ function AuditCard({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) 
 }
 
 function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void }) {
-  const actor = findUser(log.actorId);
   return (
     <Drawer
       open
       onClose={onClose}
-      title={auditActionLabels[log.action]}
-      description={`${log.atLabel} · ${actor?.name ?? "未知操作者"}`}
+      title={actionLabelOf(log.action)}
+      description={`${log.atLabel} · ${log.actorName ?? "未知操作者"}`}
       footer={
         <div className="flex justify-end">
           <Button variant="secondary" onClick={onClose}>
@@ -336,7 +435,7 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
         <div className="mt-2 rounded-xl border border-border bg-surface-2/60 p-3">
           <p className="text-sm font-medium text-fg">{log.resourceLabel}</p>
           <p className="mt-1 text-[11px] text-subtle">
-            {auditResourceLabels[log.resourceType]} · {log.resourceId}
+            {resourceLabelOf(log.resourceType)} · {log.resourceId}
           </p>
         </div>
       </section>
@@ -345,13 +444,11 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
         <h3 className="text-xs font-medium text-fg">操作者</h3>
         <div className="mt-2 flex items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2.5">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-fg">
-            {actor?.name.slice(0, 1) ?? "?"}
+            {log.actorName?.slice(0, 1) ?? "?"}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-sm text-fg">{actor?.name ?? "未知操作者"}</p>
-            <p className="mt-0.5 truncate text-[11px] text-subtle">
-              {actor?.email ?? "—"} · {actor ? roleLabels[actor.role] : "—"}
-            </p>
+            <p className="text-sm text-fg">{log.actorName ?? "未知操作者"}</p>
+            <p className="mt-0.5 truncate text-[11px] text-subtle">本地账号</p>
           </div>
         </div>
       </section>
@@ -389,8 +486,8 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
       </section>
 
       <div className="mt-4">
-        <InfoBanner tone="neutral" icon="lock" title="只读示例">
-          审计事件不可在这里修改。服务端已写入 audit_logs；查询 API 与页面接真将在下一冲刺完成。
+        <InfoBanner tone="neutral" icon="lock" title="只读">
+          审计事件不可在这里修改，数据来自服务端 audit_logs。
         </InfoBanner>
       </div>
     </Drawer>

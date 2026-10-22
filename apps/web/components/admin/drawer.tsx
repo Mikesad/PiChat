@@ -3,7 +3,7 @@
 import { type ReactNode, useId } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "../icons";
-import { useFocusTrap } from "./use-focus-trap";
+import { useFocusTrap } from "../use-focus-trap";
 
 interface DrawerProps {
   open: boolean;

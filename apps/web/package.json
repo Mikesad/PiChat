@@ -12,6 +12,7 @@
   "dependencies": {
     "@pichat/access-control": "workspace:*",
     "@pichat/shared": "workspace:*",
+    "docx-preview": "^0.4.1",
     "next": "15.5.28",
     "react": "19.3.1",
     "react-dom": "19.3.1"

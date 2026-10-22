@@ -26,6 +26,7 @@ import { useToast } from "./admin/toast";
 import { ChatHeader } from "./chat-header";
 import { CitationsPanel } from "./citations-panel";
 import { Composer } from "./composer";
+import { DocumentPreviewDialog } from "./document-preview-dialog";
 import { EmptyState } from "./empty-state";
 import { MessageList } from "./message-list";
 import { useModelConfig } from "./model-config/model-config-provider";
@@ -78,6 +79,7 @@ export function ChatWorkspace() {
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [loadingThread, setLoadingThread] = useState(false);
   const [selectedCitationId, setSelectedCitationId] = useState<string | null>(null);
+  const [previewCitation, setPreviewCitation] = useState<ChatCitation | null>(null);
   const [citationsOpen, setCitationsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
@@ -172,7 +174,7 @@ export function ChatWorkspace() {
 
   useEffect(() => {
     function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key !== "Escape") {
+      if (event.key !== "Escape" || previewCitation) {
         return;
       }
       if (sidebarOpen) {
@@ -184,7 +186,7 @@ export function ChatWorkspace() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [sidebarOpen, citationsOpen, closeSidebar, closeCitations]);
+  }, [sidebarOpen, citationsOpen, closeSidebar, closeCitations, previewCitation]);
 
   useEffect(() => {
     const container = threadScrollRef.current;
@@ -595,6 +597,10 @@ export function ChatWorkspace() {
     }
   }
 
+  function handleCitationPreview(citation: ChatCitation) {
+    setPreviewCitation(citation);
+  }
+
   function handleThreadScroll() {
     const container = threadScrollRef.current;
     if (!container) {
@@ -624,7 +630,10 @@ export function ChatWorkspace() {
         onClose={closeSidebar}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col" inert={sidebarOpen || citationsOpen}>
+      <div
+        className="flex min-w-0 flex-1 flex-col"
+        inert={sidebarOpen || citationsOpen || previewCitation !== null}
+      >
         <ChatHeader
           title={activeSession?.title ?? "新对话"}
           hasMessages={messages.length > 0}
@@ -654,6 +663,7 @@ export function ChatWorkspace() {
                   messages={messages}
                   selectedCitationId={selectedCitationId}
                   onCitationSelect={handleCitationSelect}
+                  onCitationPreview={handleCitationPreview}
                   onRetry={handleRetry}
                   busy={runStatus !== "idle"}
                 />
@@ -679,6 +689,7 @@ export function ChatWorkspace() {
               citations={citations}
               selectedId={selectedCitationId}
               onSelect={handleCitationSelect}
+              onPreview={handleCitationPreview}
               pending={runStatus !== "idle"}
             />
           </aside>
@@ -705,11 +716,21 @@ export function ChatWorkspace() {
               citations={citations}
               selectedId={selectedCitationId}
               onSelect={handleCitationSelect}
+              onPreview={handleCitationPreview}
               onClose={closeCitations}
               pending={runStatus !== "idle"}
             />
           </div>
         </div>
+      ) : null}
+
+      {previewCitation ? (
+        <DocumentPreviewDialog
+          key={previewCitation.id}
+          documentId={previewCitation.documentId}
+          title={previewCitation.documentTitle}
+          onClose={() => setPreviewCitation(null)}
+        />
       ) : null}
     </div>
   );

@@ -19,10 +19,17 @@ export interface AccessScopeDocument {
   ragflowDocumentId: string;
 }
 
+export interface AccessScopeRetrievalSettings {
+  topK: number;
+  similarityThreshold: number;
+  vectorWeight: number;
+}
+
 export interface AccessScopeKnowledgeBase {
   id: string;
   name: string;
   ragflowDatasetId: string;
+  retrieval: AccessScopeRetrievalSettings;
   documents: AccessScopeDocument[];
 }
 

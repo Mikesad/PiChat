@@ -594,9 +594,121 @@ API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；
 - 成功 `200 { aclVersion, documents: DocumentSummary[] }`，`documents` 按请求中的 `documentIds` 顺序返回。
 - 跨租户知识库 `404`；角色不足 `403`。
 
-### 14.5 队列与 Worker 语义
+### 14.5 `GET /api/documents/:id/content`
+
+在线预览原文件，要求登录。知识库详情页与聊天「引用与来源」共用此接口。
+
+- 权限：按当前 principal 计算文档有效 ACL（`tenant_admin` 角色覆盖）；无读权限、跨租户、文档或所属知识库已软删除、本地文件缺失均返回 `404 not_found`。可见元数据不代表可读取内容。
+- 成功 `200`：流式返回 `UPLOAD_DIR` 内原文件；`Content-Type` 按文件名归一化，`Content-Disposition: inline`，并返回 `Accept-Ranges: bytes`、`Content-Length`。
+- 单段 `Range: bytes=start-end`（也支持 `bytes=start-`、`bytes=-suffix`）返回 `206` 与 `Content-Range`；非法或多段 Range 返回 `416` 和 `Content-Range: bytes */<size>`。
+- 本地路径必须经 `realpath` 校验仍在 `UPLOAD_DIR` 内，禁止路径穿越；预览响应不暴露本地路径。
+- Web BFF 透传 `Range` 及 `Content-Length`、`Content-Range`、`Accept-Ranges`、`Content-Disposition`。
+
+### 14.6 队列与 Worker 语义
 
 - 任务 jobId 固定为 `ingest-<documentId>`（BullMQ 不允许 jobId 含冒号），入队前尝试移除同 ID 的旧任务；完成的任务立即移除，失败任务最多保留 1000 个。
 - 删除接口在 Redis 不可用时仍完成 DB 软删除；日志记录取消失败，Worker 通过 DB 的 `deleted_at` / `status=deleted` 再次确认并跳过。
 - Worker 在写 RAGFlow、更新文档状态前使用条件更新；若文档在入库过程中被删除，会尽力删除已上传的 RAGFlow 文档并返回 `skipped`。
 - Worker 找不到知识库（含软删除）时跳过，不再把文档标记为失败后继续上传。
+
+## 15. 任务 F 新增接口（2026-10-22）
+
+### 15.1 `PATCH /api/knowledge-bases/:id`
+
+更新知识库名称、描述与检索参数。`tenant_admin` / `knowledge_admin` 可调用；`member` / `security_admin` 返回 `403`。
+
+请求：
+
+```json
+{
+  "name": "内部制度 2026",
+  "description": "更新后的描述",
+  "retrievalTopK": 6,
+  "retrievalSimilarityThreshold": 0.2,
+  "retrievalVectorWeight": 0.3
+}
+```
+
+- 所有字段可选；`name` 1–160，`retrievalTopK` 1–50，阈值与向量权重 0–1。
+- 名称在租户内唯一（忽略已软删除知识库），重复返回 `409 conflict`。
+- 成功 `200 { knowledgeBase: KnowledgeBaseSummary }`；审计 `knowledge_base.update`，metadata 记录 `changes` 与生效后的 `retrieval`。
+- `KnowledgeBaseSummary` 新增 `retrievalTopK`、`retrievalSimilarityThreshold`、`retrievalVectorWeight`。
+- Runtime 通过内部 scope 获取每个知识库的 `retrieval` 配置，`kb_search` / `kb_read` 按知识库配置设置 `topK` / `similarity_threshold` / `vector_similarity_weight`。
+
+### 15.2 `GET /api/members`
+
+返回当前租户成员与用户组。`tenant_admin` / `security_admin` 可读；其他角色 `403`。
+
+```json
+{
+  "members": [
+    {
+      "id": "u-zhang",
+      "email": "zhang.ming@example.com",
+      "displayName": "张明",
+      "role": "tenant_admin",
+      "status": "active",
+      "groupIds": ["g-all", "g-platform"],
+      "lastActiveAt": "2026-10-22T10:00:00.000Z",
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "groups": [{ "id": "g-all", "name": "全员", "externalId": "idp-all-staff", "memberCount": 14 }]
+}
+```
+
+- `lastActiveAt` 取该用户最近一次 `auth_sessions.last_used_at`，没有会话时为 `null`。
+- 查询显式带 `tenant_id`；不返回密码哈希。
+
+### 15.3 `PATCH /api/members/:id`
+
+`tenant_admin` 可编辑成员角色、状态与用户组（整体替换）。
+
+```json
+{ "role": "knowledge_admin", "status": "active", "groupIds": ["g-all", "g-product"] }
+```
+
+- `groupIds` 必须全部属于当前租户，重复自动去重，否则 `400 invalid_request`。
+- 不能修改自己的角色或状态（`400`）。
+- 不能移除最后一个启用的 `tenant_admin`（`400`）。
+- 成功 `200 { member: MemberSummary }`；审计 `member.update`。
+
+### 15.4 `POST /api/members/:id/password`
+
+`tenant_admin` 重置成员密码。
+
+```json
+{ "password": "至少 6 位" }
+```
+
+- 成功后删除该成员全部 `auth_sessions`，现有登录立即失效；审计 `member.password_reset`（不记录密码）。
+
+### 15.5 `GET /api/audit-logs`
+
+`tenant_admin` / `security_admin` 可读；返回当前租户审计事件，按时间倒序。
+
+查询参数：`limit`（1–200，默认 100）、`action`、`resourceType`、`result`（`success` / `denied` / `failed`）、`actorId`。
+
+```json
+{
+  "logs": [
+    {
+      "id": "audit-uuid",
+      "actorId": "u-zhang",
+      "actorName": "张明",
+      "action": "knowledge_base.update",
+      "resourceType": "knowledge_base",
+      "resourceId": "kb-policy",
+      "resourceLabel": "内部制度",
+      "result": "success",
+      "summary": "更新知识库设置「内部制度」",
+      "metadata": { "changes": ["name"] },
+      "createdAt": "2026-10-22T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+- 资源标题按 `resourceType` 批量补齐（知识库名 / 文档标题 / 成员名）；`result` 取自 metadata，缺省 `success`。
+- 审计事件只读，不提供修改或删除接口。

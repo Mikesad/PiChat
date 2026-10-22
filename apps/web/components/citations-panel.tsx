@@ -9,6 +9,7 @@ interface CitationsPanelProps {
   citations: Citation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onPreview: (citation: Citation) => void;
   onClose?: () => void;
   pending?: boolean;
   className?: string;
@@ -20,6 +21,7 @@ export function CitationsPanel({
   citations,
   selectedId,
   onSelect,
+  onPreview,
   onClose,
   pending = false,
   className,
@@ -73,46 +75,62 @@ export function CitationsPanel({
               const selected = citation.id === selectedId;
               return (
                 <li key={citation.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(citation.id)}
-                    aria-pressed={selected}
-                    aria-label={`查看引用 ${citation.index}：${citation.documentTitle}`}
+                  <div
                     className={cn(
-                      "w-full cursor-pointer rounded-xl border p-3 text-left transition-colors duration-150",
+                      "rounded-xl border p-3 transition-colors duration-150",
                       selected
                         ? "border-accent bg-accent-soft"
                         : "border-border bg-surface hover:border-border-strong hover:bg-surface-2",
                     )}
                   >
-                    <div className="flex items-start gap-2">
-                      <span
-                        className={cn(
-                          "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-semibold tabular-nums",
-                          selected ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted",
-                        )}
-                      >
-                        {citation.index}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm leading-5 font-medium text-fg">
-                          {citation.documentTitle}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-subtle">
-                          {citation.knowledgeBaseName} · {citation.chunkId}
-                        </p>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(citation.id)}
+                      aria-pressed={selected}
+                      aria-label={`查看引用 ${citation.index}：${citation.documentTitle}`}
+                      className="w-full cursor-pointer text-left"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span
+                          className={cn(
+                            "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-semibold tabular-nums",
+                            selected ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted",
+                          )}
+                        >
+                          {citation.index}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm leading-5 font-medium text-fg">
+                            {citation.documentTitle}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-subtle">
+                            {citation.knowledgeBaseName} · {citation.chunkId}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted">
-                      {citation.snippet}
-                    </p>
-                    {selected ? (
-                      <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-accent-text">
-                        <Icon name="check" size={12} strokeWidth={2.25} />
-                        已选中
+                      <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted">
+                        {citation.snippet}
                       </p>
-                    ) : null}
-                  </button>
+                    </button>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      {selected ? (
+                        <p className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-text">
+                          <Icon name="check" size={12} strokeWidth={2.25} />
+                          已选中
+                        </p>
+                      ) : (
+                        <span />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onPreview(citation)}
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted transition-colors hover:bg-surface hover:text-accent-text"
+                      >
+                        <Icon name="eye" size={12} />
+                        查看原文
+                      </button>
+                    </div>
+                  </div>
                 </li>
               );
             })}

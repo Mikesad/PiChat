@@ -13,12 +13,12 @@ import {
   subjectName,
 } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
+import { DocumentPreviewDialog } from "../document-preview-dialog";
 import { Icon, Spinner } from "../icons";
 import { IconButton } from "../ui";
 import { BulkAclDrawer, DocumentAclDrawer, SubjectSelect } from "./acl";
 import { useAdminData } from "./admin-data";
 import { ConfirmDialog } from "./confirm-dialog";
-import { useNotImplemented } from "./not-implemented";
 import { Tabs } from "./tabs";
 import { useToast } from "./toast";
 import {
@@ -45,16 +45,27 @@ import { UploadDrawer } from "./upload-drawer";
 import { useApiErrorHandler } from "./use-api-error";
 
 type TabId = "documents" | "access" | "settings";
-type StatusFilter = "all" | "ready" | "parsing" | "failed" | "no-access" | "exceptions";
+type StatusFilter = "all" | "pending" | "ready" | "parsing" | "failed" | "no-access" | "exceptions";
 
 const filters: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部" },
+  { id: "pending", label: "排队中" },
   { id: "ready", label: "可检索" },
   { id: "parsing", label: "解析中" },
   { id: "failed", label: "解析失败" },
   { id: "no-access", label: "无人可访问" },
   { id: "exceptions", label: "有例外" },
 ];
+
+function reparseLabel(status: AdminDocument["status"]) {
+  if (status === "pending") {
+    return "开始解析";
+  }
+  if (status === "failed") {
+    return "重试解析";
+  }
+  return "重新解析";
+}
 
 export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const { knowledgeBases, status, error, reload, reparseDocument } = useAdminData();
@@ -65,11 +76,19 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
   const [tab, setTab] = useState<TabId>("documents");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
+  const [previewDocument, setPreviewDocument] = useState<AdminDocument | null>(null);
 
   async function handleReparse(documentId: string) {
+    const document = knowledgeBase?.documents.find((item) => item.id === documentId);
     try {
       await reparseDocument(documentId);
-      showToast("已重新加入解析队列");
+      if (document?.status === "pending") {
+        showToast("已加入解析队列");
+      } else if (document?.status === "failed") {
+        showToast("已重新加入解析队列");
+      } else {
+        showToast("已提交重新解析");
+      }
     } catch (cause) {
       await handleApiError(cause);
     }
@@ -170,10 +189,10 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
           { label: "文档总数", value: stats.total, hint: "不含已删除" },
           { label: "可检索", value: stats.ready, hint: "解析完成" },
           {
-            label: "解析中",
-            value: stats.parsing,
-            hint: "完成后可检索",
-            tone: stats.parsing > 0 ? "warning" : "default",
+            label: "待解析",
+            value: stats.pending + stats.parsing,
+            hint: "排队中或解析中",
+            tone: stats.pending + stats.parsing > 0 ? "warning" : "default",
           },
           {
             label: "解析失败",
@@ -206,7 +225,8 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
             knowledgeBase={knowledgeBase}
             onOpenAcl={setAclDocumentId}
             onUpload={() => setUploadOpen(true)}
-            onRetry={(documentId) => void handleReparse(documentId)}
+            onRetry={handleReparse}
+            onPreview={setPreviewDocument}
           />
         ) : null}
         {tab === "access" ? (
@@ -227,6 +247,15 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
           onClose={() => setAclDocumentId(null)}
         />
       ) : null}
+      {previewDocument ? (
+        <DocumentPreviewDialog
+          key={previewDocument.id}
+          documentId={previewDocument.id}
+          title={previewDocument.title}
+          sizeLabel={previewDocument.sizeLabel}
+          onClose={() => setPreviewDocument(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -236,11 +265,13 @@ function DocumentsTab({
   onOpenAcl,
   onUpload,
   onRetry,
+  onPreview,
 }: {
   knowledgeBase: AdminKnowledgeBase;
   onOpenAcl: (documentId: string) => void;
   onUpload: () => void;
-  onRetry: (documentId: string) => void;
+  onRetry: (documentId: string) => Promise<void>;
+  onPreview: (document: AdminDocument) => void;
 }) {
   const { deleteDocument, deleteDocuments } = useAdminData();
   const { showToast } = useToast();
@@ -252,6 +283,8 @@ function DocumentsTab({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkAclOpen, setBulkAclOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [reparsingIds, setReparsingIds] = useState<string[]>([]);
+  const [reparseTarget, setReparseTarget] = useState<AdminDocument | null>(null);
 
   const normalized = query.trim().toLowerCase();
   const rows = knowledgeBase.documents.filter((document) => {
@@ -295,6 +328,25 @@ function DocumentsTab({
         ? [...new Set([...previous, ...visibleIds])]
         : previous.filter((id) => !visibleIds.includes(id)),
     );
+  }
+
+  async function runReparse(documentId: string) {
+    setReparsingIds((previous) =>
+      previous.includes(documentId) ? previous : [...previous, documentId],
+    );
+    try {
+      await onRetry(documentId);
+    } finally {
+      setReparsingIds((previous) => previous.filter((id) => id !== documentId));
+    }
+  }
+
+  function requestReparse(document: AdminDocument) {
+    if (document.status === "ready" || document.status === "parsing") {
+      setReparseTarget(document);
+      return;
+    }
+    void runReparse(document.id);
   }
 
   async function handleDeleteDocument() {
@@ -439,7 +491,9 @@ function DocumentsTab({
                     selected={selectedIds.includes(document.id)}
                     onToggle={(checked) => toggleOne(document.id, checked)}
                     onOpenAcl={() => onOpenAcl(document.id)}
-                    onRetry={() => onRetry(document.id)}
+                    onRetry={() => requestReparse(document)}
+                    retrying={reparsingIds.includes(document.id)}
+                    onPreview={() => onPreview(document)}
                     onDelete={() => setDeleteTarget(document)}
                   />
                 ))}
@@ -470,7 +524,9 @@ function DocumentsTab({
                 selected={selectedIds.includes(document.id)}
                 onToggle={(checked) => toggleOne(document.id, checked)}
                 onOpenAcl={() => onOpenAcl(document.id)}
-                onRetry={() => onRetry(document.id)}
+                onRetry={() => requestReparse(document)}
+                retrying={reparsingIds.includes(document.id)}
+                onPreview={() => onPreview(document)}
                 onDelete={() => setDeleteTarget(document)}
               />
             ))}
@@ -527,6 +583,21 @@ function DocumentsTab({
         confirmLabel={deleting ? "删除中…" : "删除文档"}
         tone="danger"
       />
+
+      {reparseTarget ? (
+        <ConfirmDialog
+          open
+          onClose={() => setReparseTarget(null)}
+          onConfirm={() => {
+            const target = reparseTarget;
+            setReparseTarget(null);
+            void runReparse(target.id);
+          }}
+          title={reparseTarget.status === "ready" ? "重新解析这篇文档？" : "重新启动解析？"}
+          description="将重新调用 RAGFlow 解析并重建该文档的向量索引，解析期间文档会暂时不可检索。"
+          confirmLabel="重新解析"
+        />
+      ) : null}
     </div>
   );
 }
@@ -538,6 +609,8 @@ function DocumentRow({
   onToggle,
   onOpenAcl,
   onRetry,
+  retrying,
+  onPreview,
   onDelete,
 }: {
   knowledgeBase: AdminKnowledgeBase;
@@ -546,6 +619,8 @@ function DocumentRow({
   onToggle: (checked: boolean) => void;
   onOpenAcl: () => void;
   onRetry: () => void;
+  retrying: boolean;
+  onPreview: () => void;
   onDelete: () => void;
 }) {
   const exceptionCount = document.exceptions.length;
@@ -568,7 +643,14 @@ function DocumentRow({
         ) : null}
       </td>
       <td className={tdClass}>
-        <p className="max-w-[300px] truncate text-sm font-medium text-fg">{document.title}</p>
+        <button
+          type="button"
+          onClick={onPreview}
+          className="block max-w-[300px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+          title={`预览 ${document.title}`}
+        >
+          {document.title}
+        </button>
         <p className="mt-0.5 text-[11px] text-subtle">
           {document.sizeLabel ?? "—"} · {document.updatedLabel}
         </p>
@@ -610,17 +692,24 @@ function DocumentRow({
         <p className="text-xs text-muted">{document.updatedLabel}</p>
       </td>
       <td className={`${tdClass} text-right`}>
-        {canManage ? (
-          <div className="flex items-center justify-end gap-0.5">
-            <IconButton label="设置权限" icon="shield-check" onClick={onOpenAcl} />
-            {document.status === "failed" ? (
-              <IconButton label="重新解析" icon="refresh" onClick={onRetry} />
-            ) : null}
-            <IconButton label="删除文档" icon="trash" onClick={onDelete} />
-          </div>
-        ) : (
-          <span className="text-xs text-subtle">只读</span>
-        )}
+        <div className="flex items-center justify-end gap-0.5">
+          <IconButton label="预览文档" icon="eye" onClick={onPreview} />
+          {canManage ? (
+            <>
+              <IconButton label="管理与权限" icon="shield-check" onClick={onOpenAcl} />
+              <IconButton
+                label={retrying ? "正在提交解析" : reparseLabel(document.status)}
+                icon="refresh"
+                onClick={onRetry}
+                disabled={retrying}
+                aria-busy={retrying}
+              />
+              <IconButton label="删除文档" icon="trash" onClick={onDelete} />
+            </>
+          ) : (
+            <span className="px-1 text-xs text-subtle">只读</span>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -633,6 +722,8 @@ function MobileDocumentCard({
   onToggle,
   onOpenAcl,
   onRetry,
+  retrying,
+  onPreview,
   onDelete,
 }: {
   knowledgeBase: AdminKnowledgeBase;
@@ -641,6 +732,8 @@ function MobileDocumentCard({
   onToggle: (checked: boolean) => void;
   onOpenAcl: () => void;
   onRetry: () => void;
+  retrying: boolean;
+  onPreview: () => void;
   onDelete: () => void;
 }) {
   const exceptionCount = document.exceptions.length;
@@ -665,7 +758,14 @@ function MobileDocumentCard({
           <Icon name="file-text" size={15} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-fg">{document.title}</p>
+          <button
+            type="button"
+            onClick={onPreview}
+            className="block max-w-full cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+            title={`预览 ${document.title}`}
+          >
+            {document.title}
+          </button>
           <p className="mt-0.5 text-[11px] text-subtle">
             {document.sizeLabel ?? "—"} · {document.updatedLabel}
           </p>
@@ -684,26 +784,30 @@ function MobileDocumentCard({
         <span>{exceptionCount} 条文档例外</span>
         {denyCount > 0 ? <span className="text-danger">{denyCount} 条拒绝</span> : null}
       </div>
-      {canManage ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" onClick={onOpenAcl}>
-            <Icon name="shield-check" size={13} />
-            设置权限
-          </Button>
-          {document.status === "failed" ? (
-            <Button size="sm" variant="secondary" onClick={onRetry}>
-              <Icon name="refresh" size={13} />
-              重新解析
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={onPreview}>
+          <Icon name="eye" size={13} />
+          预览
+        </Button>
+        {canManage ? (
+          <>
+            <Button size="sm" variant="secondary" onClick={onOpenAcl}>
+              <Icon name="shield-check" size={13} />
+              管理权限
             </Button>
-          ) : null}
-          <Button size="sm" variant="ghost" onClick={onDelete}>
-            <Icon name="trash" size={13} />
-            删除
-          </Button>
-        </div>
-      ) : (
-        <p className="mt-2 text-[11px] text-subtle">当前角色只读</p>
-      )}
+            <Button size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
+              <Icon name="refresh" size={13} />
+              {retrying ? "提交中…" : reparseLabel(document.status)}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDelete}>
+              <Icon name="trash" size={13} />
+              删除
+            </Button>
+          </>
+        ) : (
+          <span className="text-[11px] text-subtle">当前角色只读</span>
+        )}
+      </div>
     </li>
   );
 }
@@ -940,25 +1044,72 @@ function SettingsTab({
   knowledgeBase: AdminKnowledgeBase;
   onDeleted: () => void;
 }) {
-  const { deleteKnowledgeBase } = useAdminData();
-  const notifyNotImplemented = useNotImplemented();
+  const { deleteKnowledgeBase, updateKnowledgeBase } = useAdminData();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
   const [name, setName] = useState(knowledgeBase.name);
   const [description, setDescription] = useState(knowledgeBase.description);
+  const [retrievalTopK, setRetrievalTopK] = useState(knowledgeBase.retrievalTopK);
+  const [retrievalSimilarityThreshold, setRetrievalSimilarityThreshold] = useState(
+    knowledgeBase.retrievalSimilarityThreshold,
+  );
+  const [retrievalVectorWeight, setRetrievalVectorWeight] = useState(
+    knowledgeBase.retrievalVectorWeight,
+  );
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const dirty = name !== knowledgeBase.name || description !== knowledgeBase.description;
+  const dirty =
+    name !== knowledgeBase.name ||
+    description !== knowledgeBase.description ||
+    retrievalTopK !== knowledgeBase.retrievalTopK ||
+    retrievalSimilarityThreshold !== knowledgeBase.retrievalSimilarityThreshold ||
+    retrievalVectorWeight !== knowledgeBase.retrievalVectorWeight;
 
-  function handleSave() {
+  async function handleSave() {
     if (name.trim().length < 2) {
       setError("名称至少需要 2 个字符");
       return;
     }
+    if (!Number.isFinite(retrievalTopK) || retrievalTopK < 1 || retrievalTopK > 12) {
+      setError("Top-K 必须是 1 到 12 之间的整数");
+      return;
+    }
+    if (
+      !Number.isFinite(retrievalSimilarityThreshold) ||
+      retrievalSimilarityThreshold < 0 ||
+      retrievalSimilarityThreshold > 1
+    ) {
+      setError("相似度阈值必须在 0 到 1 之间");
+      return;
+    }
+    if (
+      !Number.isFinite(retrievalVectorWeight) ||
+      retrievalVectorWeight < 0 ||
+      retrievalVectorWeight > 1
+    ) {
+      setError("向量权重必须在 0 到 1 之间");
+      return;
+    }
+
     setError(null);
-    notifyNotImplemented("修改知识库设置");
+    setSaving(true);
+    try {
+      await updateKnowledgeBase(knowledgeBase.id, {
+        name: name.trim(),
+        description,
+        retrievalTopK: Math.round(retrievalTopK),
+        retrievalSimilarityThreshold,
+        retrievalVectorWeight,
+      });
+      showToast("知识库设置已保存");
+    } catch (cause) {
+      await handleApiError(cause);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleDelete() {
@@ -980,8 +1131,9 @@ function SettingsTab({
 
   return (
     <div className="space-y-4">
-      <InfoBanner tone="neutral" icon="info" title="本冲刺未接入设置修改">
-        知识库名称、描述和删除接口将在后续冲刺接入；当前修改不会写入服务端。
+      <InfoBanner tone="neutral" icon="info" title="检索参数即时生效">
+        这里的检索参数会保存到服务端，并在下一次问答时由 Agent Runtime 使用。分块大小和切分方法仍由
+        RAGFlow 数据集配置决定，修改后需要重新解析文档。
       </InfoBanner>
 
       <div className="rounded-xl border border-border bg-surface p-4 sm:p-5">
@@ -1012,8 +1164,11 @@ function SettingsTab({
             />
           </FormField>
           <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={!dirty || !knowledgeBase.canManageAcl}>
-              保存设置
+            <Button
+              onClick={() => void handleSave()}
+              disabled={!dirty || saving || !knowledgeBase.canManageAcl}
+            >
+              {saving ? "保存中…" : "保存设置"}
             </Button>
           </div>
         </div>
@@ -1043,6 +1198,58 @@ function SettingsTab({
             <dd className="mt-1 text-sm tabular-nums text-fg">{knowledgeBase.aclVersion}</dd>
           </div>
         </dl>
+        <div className="mt-5 grid max-w-3xl gap-3 sm:grid-cols-3">
+          <FormField id="settings-top-k" label="Top-K">
+            <input
+              id="settings-top-k"
+              type="number"
+              min={1}
+              max={12}
+              value={retrievalTopK}
+              onChange={(event) => {
+                setRetrievalTopK(Number(event.target.value));
+                setError(null);
+              }}
+              disabled={!knowledgeBase.canManageAcl}
+              className={inputClass}
+            />
+          </FormField>
+          <FormField id="settings-threshold" label="相似度阈值">
+            <input
+              id="settings-threshold"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={retrievalSimilarityThreshold}
+              onChange={(event) => {
+                setRetrievalSimilarityThreshold(Number(event.target.value));
+                setError(null);
+              }}
+              disabled={!knowledgeBase.canManageAcl}
+              className={inputClass}
+            />
+          </FormField>
+          <FormField id="settings-vector-weight" label="向量权重">
+            <input
+              id="settings-vector-weight"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={retrievalVectorWeight}
+              onChange={(event) => {
+                setRetrievalVectorWeight(Number(event.target.value));
+                setError(null);
+              }}
+              disabled={!knowledgeBase.canManageAcl}
+              className={inputClass}
+            />
+          </FormField>
+        </div>
+        <p className="mt-2 text-[11px] text-subtle">
+          向量权重越高越偏向语义检索；越低越偏向关键词检索。修改后下一次提问生效。
+        </p>
         <div className="mt-3">
           <InfoBanner tone="warning" icon="lock" title="配置锁定">
             Embedding 模型创建后不可更改；更换模型需要新建知识库并重新解析全部文档。RAGFlow API Key

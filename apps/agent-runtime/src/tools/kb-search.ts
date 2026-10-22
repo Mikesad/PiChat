@@ -70,10 +70,10 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
         throw new ToolExecutionError("invalid_query", "检索词不能为空");
       }
 
-      const topK = Math.min(
-        Math.max(params.topK ?? context.config.search.topK, 1),
-        context.config.search.maxTopK,
-      );
+      const requestedTopK =
+        params.topK === undefined
+          ? undefined
+          : Math.min(Math.max(params.topK, 1), context.config.search.maxTopK);
 
       const scope = await context.accessClient.scope(
         context.principal,
@@ -92,16 +92,39 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
         }
       }
 
+      const topKFor = (knowledgeBase: (typeof scope.knowledgeBases)[number]) =>
+        requestedTopK ??
+        Math.min(
+          Math.max(knowledgeBase.retrieval?.topK ?? context.config.search.topK, 1),
+          context.config.search.maxTopK,
+        );
+      const finalTopK =
+        requestedTopK ??
+        Math.min(
+          Math.max(
+            ...scope.knowledgeBases.map(
+              (knowledgeBase) => knowledgeBase.retrieval?.topK ?? context.config.search.topK,
+            ),
+            1,
+          ),
+          context.config.search.maxTopK,
+        );
+
       const settled = await Promise.allSettled(
-        scope.knowledgeBases.map((knowledgeBase) =>
-          ragflow.retrieve({
+        scope.knowledgeBases.map((knowledgeBase) => {
+          const knowledgeBaseTopK = topKFor(knowledgeBase);
+          return ragflow.retrieve({
             question: query,
             datasetIds: [knowledgeBase.ragflowDatasetId],
             documentIds: knowledgeBase.documents.map((document) => document.ragflowDocumentId),
-            topK: Math.max(topK * 2, topK),
-            similarityThreshold: context.config.search.similarityThreshold,
-          }),
-        ),
+            topK: Math.max(knowledgeBaseTopK * 2, knowledgeBaseTopK),
+            similarityThreshold:
+              knowledgeBase.retrieval?.similarityThreshold ??
+              context.config.search.similarityThreshold,
+            vectorSimilarityWeight:
+              knowledgeBase.retrieval?.vectorWeight ?? context.config.search.vectorWeight,
+          });
+        }),
       );
 
       const failures = settled.filter(
@@ -139,7 +162,7 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
 
       const results: Array<{ citation: ChatCitation; snippet: string }> = [];
       let totalChars = 0;
-      for (const item of selected.slice(0, topK)) {
+      for (const item of selected.slice(0, finalTopK)) {
         const snippet = truncate(item.chunk.content, context.config.search.maxSnippetChars);
         if (
           results.length > 0 &&

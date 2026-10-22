@@ -173,6 +173,90 @@ describeWithDatabase("documents upload service", () => {
     });
   });
 
+  it("serves original content to admins and readers while hiding it from other members", async () => {
+    const documentId = randomUUID();
+    const directory = join(uploadDirectory, tenantId, knowledgeBaseId, documentId);
+    await mkdir(directory, { recursive: true });
+    const sourceKey = join(directory, "preview.md");
+    const body = "# 预览\n\n原文内容";
+    await writeFile(sourceKey, body, "utf8");
+    await db.insert(documents).values({
+      id: documentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "预览.md",
+      sourceKey,
+      status: "ready",
+      mimeType: "text/markdown",
+      sizeBytes: Buffer.byteLength(body),
+    });
+
+    await expect(service.getContent(admin, documentId)).resolves.toMatchObject({
+      fileName: "预览.md",
+      mimeType: "text/markdown; charset=utf-8",
+      sizeBytes: Buffer.byteLength(body),
+      path: sourceKey,
+    });
+
+    await expect(service.getContent(member, documentId)).rejects.toMatchObject({
+      code: "not_found",
+    });
+
+    await db.insert(documentAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      documentId,
+      subjectType: "user",
+      subjectId: memberId,
+      permission: "read",
+    });
+
+    await expect(service.getContent(member, documentId)).resolves.toMatchObject({
+      fileName: "预览.md",
+    });
+  });
+
+  it("rejects content outside the upload root and deleted documents", async () => {
+    const outsideRoot = await mkdtemp(join(tmpdir(), "pichat-preview-outside-"));
+    const foreignPath = join(outsideRoot, "outside.txt");
+    await writeFile(foreignPath, "outside");
+
+    const outsideDocumentId = randomUUID();
+    await db.insert(documents).values({
+      id: outsideDocumentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "outside.txt",
+      sourceKey: foreignPath,
+      status: "ready",
+    });
+
+    await expect(service.getContent(admin, outsideDocumentId)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await rm(outsideRoot, { recursive: true, force: true });
+
+    const deletedDocumentId = randomUUID();
+    const deletedDirectory = join(uploadDirectory, tenantId, knowledgeBaseId, deletedDocumentId);
+    await mkdir(deletedDirectory, { recursive: true });
+    const deletedPath = join(deletedDirectory, "deleted.txt");
+    await writeFile(deletedPath, "deleted");
+    await db.insert(documents).values({
+      id: deletedDocumentId,
+      tenantId,
+      knowledgeBaseId,
+      title: "deleted.txt",
+      sourceKey: deletedPath,
+      status: "deleted",
+      deletedAt: new Date(),
+    });
+
+    await expect(service.getContent(admin, deletedDocumentId)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+
   it("rejects uploads from members without touching the queue", async () => {
     const before = queue.jobs.length;
     await expect(

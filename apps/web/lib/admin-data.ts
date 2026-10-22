@@ -12,6 +12,7 @@ export interface AdminUser {
   role: UserRole;
   groupIds: string[];
   status: "active" | "disabled";
+  lastActiveAt?: string | null;
 }
 
 export interface AdminGroup {
@@ -53,6 +54,9 @@ export interface AdminKnowledgeBase {
   description: string;
   embeddingModel: string;
   ragflowDatasetId: string;
+  retrievalTopK: number;
+  retrievalSimilarityThreshold: number;
+  retrievalVectorWeight: number;
   aclVersion: number;
   createdAt: string;
   updatedAt: string;
@@ -262,6 +266,9 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "公司级制度、流程与合规文件，默认全员可读。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_policy_2026",
+    retrievalTopK: 6,
+    retrievalSimilarityThreshold: 0.2,
+    retrievalVectorWeight: 0.3,
     aclVersion: 1,
     documentCount: 5,
     readableDocumentCount: 4,
@@ -335,6 +342,9 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "对外产品资料与内部版本说明，默认产品组可读。",
     embeddingModel: "text-embedding-3-large · 3072 维",
     ragflowDatasetId: "ragflow_product_v3",
+    retrievalTopK: 6,
+    retrievalSimilarityThreshold: 0.2,
+    retrievalVectorWeight: 0.3,
     aclVersion: 1,
     documentCount: 5,
     readableDocumentCount: 4,
@@ -403,6 +413,9 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "客服与售后团队的处理规范、话术与常见问题。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_support_2026",
+    retrievalTopK: 6,
+    retrievalSimilarityThreshold: 0.2,
+    retrievalVectorWeight: 0.3,
     aclVersion: 1,
     documentCount: 5,
     readableDocumentCount: 5,
@@ -472,6 +485,9 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     description: "仅在明确授权后可读，默认不对普通成员开放。",
     embeddingModel: "bge-m3 · 1024 维",
     ragflowDatasetId: "ragflow_board_2026",
+    retrievalTopK: 6,
+    retrievalSimilarityThreshold: 0.2,
+    retrievalVectorWeight: 0.3,
     aclVersion: 1,
     documentCount: 1,
     readableDocumentCount: 1,
@@ -711,6 +727,7 @@ export function documentStats(knowledgeBase: AdminKnowledgeBase) {
   return {
     total: documents.length,
     ready: documents.filter((document) => document.status === "ready").length,
+    pending: documents.filter((document) => document.status === "pending").length,
     parsing: documents.filter((document) => document.status === "parsing").length,
     failed: documents.filter((document) => document.status === "failed").length,
     withExceptions: documents.filter((document) => document.exceptions.length > 0).length,
@@ -764,11 +781,14 @@ export type AuditAction =
   | "knowledge_base.update"
   | "knowledge_base.delete"
   | "knowledge_base.default_access.update"
+  | "knowledge_base.acl.update"
   | "document.upload"
   | "document.delete"
   | "document.reparse"
   | "document.acl.update"
-  | "document.acl.batch_update";
+  | "document.acl.batch_update"
+  | "member.update"
+  | "member.password_reset";
 
 export type AuditResult = "success" | "denied" | "failed";
 
@@ -777,6 +797,7 @@ export interface AuditLogEntry {
   at: string;
   atLabel: string;
   actorId: string;
+  actorName?: string;
   action: AuditAction;
   resourceType: "knowledge_base" | "document" | "acl" | "member" | "session";
   resourceId: string;
@@ -791,11 +812,14 @@ export const auditActionLabels: Record<AuditAction, string> = {
   "knowledge_base.update": "更新知识库",
   "knowledge_base.delete": "删除知识库",
   "knowledge_base.default_access.update": "更新默认访问范围",
+  "knowledge_base.acl.update": "更新知识库权限",
   "document.upload": "上传文档",
   "document.delete": "删除文档",
   "document.reparse": "重新解析文档",
   "document.acl.update": "更新文档权限",
   "document.acl.batch_update": "批量更新文档权限",
+  "member.update": "更新成员",
+  "member.password_reset": "重置成员密码",
 };
 
 export const auditResourceLabels: Record<AuditLogEntry["resourceType"], string> = {

@@ -5,6 +5,7 @@ import type {
   CreateKnowledgeBaseRequest,
   DocumentSummary,
   KnowledgeBaseSummary,
+  UpdateKnowledgeBaseRequest,
 } from "@pichat/shared";
 import {
   createContext,
@@ -20,9 +21,7 @@ import {
   type AclSubject,
   type AdminDocument,
   type AdminKnowledgeBase,
-  type AuditLogEntry,
   formatUpdatedLabel,
-  seedAuditLogs,
 } from "@/lib/admin-data";
 import {
   ApiError,
@@ -36,6 +35,7 @@ import {
   updateDocumentAcl,
   updateDocumentsAcl,
   updateKnowledgeBaseAcl,
+  updateKnowledgeBase as updateKnowledgeBaseRequest,
 } from "@/lib/api-client";
 import { useAuth } from "../auth/auth-provider";
 
@@ -43,7 +43,6 @@ type AdminDataStatus = "loading" | "ready" | "error";
 
 interface AdminDataContextValue {
   knowledgeBases: AdminKnowledgeBase[];
-  auditLogs: AuditLogEntry[];
   status: AdminDataStatus;
   error: string | null;
   reload: () => Promise<void>;
@@ -65,6 +64,10 @@ interface AdminDataContextValue {
     documentIds: string[],
   ) => Promise<{ deleted: number; failed: Array<{ documentId: string; message: string }> }>;
   reparseDocument: (documentId: string) => Promise<void>;
+  updateKnowledgeBase: (
+    knowledgeBaseId: string,
+    input: UpdateKnowledgeBaseRequest,
+  ) => Promise<void>;
 }
 
 const AdminDataContext = createContext<AdminDataContextValue | null>(null);
@@ -99,6 +102,9 @@ function mapKnowledgeBase(
     description: knowledgeBase.description ?? "",
     embeddingModel: knowledgeBase.embeddingModel,
     ragflowDatasetId: knowledgeBase.ragflowDatasetId,
+    retrievalTopK: knowledgeBase.retrievalTopK,
+    retrievalSimilarityThreshold: knowledgeBase.retrievalSimilarityThreshold,
+    retrievalVectorWeight: knowledgeBase.retrievalVectorWeight,
     aclVersion: knowledgeBase.aclVersion,
     createdAt: knowledgeBase.createdAt,
     updatedAt: knowledgeBase.updatedAt,
@@ -243,6 +249,21 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     [reload, logout],
   );
 
+  const updateKnowledgeBase = useCallback(
+    async (knowledgeBaseId: string, input: UpdateKnowledgeBaseRequest) => {
+      try {
+        await updateKnowledgeBaseRequest(knowledgeBaseId, input);
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
   const deleteKnowledgeBase = useCallback(
     async (knowledgeBaseId: string) => {
       try {
@@ -313,7 +334,6 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     <AdminDataContext.Provider
       value={{
         knowledgeBases,
-        auditLogs: seedAuditLogs,
         status,
         error,
         reload,
@@ -325,6 +345,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
         deleteDocument,
         deleteDocuments,
         reparseDocument,
+        updateKnowledgeBase,
       }}
     >
       {children}

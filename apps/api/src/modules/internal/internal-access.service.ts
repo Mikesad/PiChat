@@ -35,6 +35,9 @@ export class InternalAccessService {
         id: knowledgeBases.id,
         name: knowledgeBases.name,
         ragflowDatasetId: knowledgeBases.ragflowDatasetId,
+        retrievalTopK: knowledgeBases.retrievalTopK,
+        retrievalSimilarityThreshold: knowledgeBases.retrievalSimilarityThreshold,
+        retrievalVectorWeight: knowledgeBases.retrievalVectorWeight,
       })
       .from(knowledgeBases)
       .where(and(...conditions))
@@ -89,6 +92,11 @@ export class InternalAccessService {
         id: knowledgeBase.id,
         name: knowledgeBase.name,
         ragflowDatasetId: knowledgeBase.ragflowDatasetId,
+        retrieval: {
+          topK: knowledgeBase.retrievalTopK,
+          similarityThreshold: knowledgeBase.retrievalSimilarityThreshold,
+          vectorWeight: knowledgeBase.retrievalVectorWeight,
+        },
         documents: scopedDocuments,
       });
     }

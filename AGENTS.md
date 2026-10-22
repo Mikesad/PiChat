@@ -8,7 +8,9 @@
 
 - `README.md`：当前完成度、环境要求、服务端口。
 - `docs/当前进度.md`：当前完成度、已确认决策、mock/真实边界、环境阻塞、第一冲刺与验收。新会话接手后端前必须先读；每完成一个阶段更新它。
-- `docs/adr/`：Pi SDK、MySQL ACL、SSE、Runtime JSONL 的关键决策。
+- `docs/test-plan-core.md`：核心链路测试方案（自动化门禁 + 真实环境人工 P0/P1）；每次验收按“先自动化、后人工”执行。
+- `docs/handoff-E.md`：任务 E 交接提示词、自动化结果与下一步；新会话可直接复用其中的提示词。
+- `docs/adr/`：Pi SDK、MySQL ACL、SSE、Runtime JSONL、知识库生命周期与删除语义的关键决策。
 - `package.json`、`turbo.json`、各 workspace 的 `package.json`：命令的最终事实来源。
 
 文档与脚本冲突时，以脚本和配置为准。进度文件是交接索引，不替代代码、Schema 和 ADR。
@@ -98,12 +100,12 @@ pnpm format
 
 ## 当前完成度
 
-已实现：monorepo、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、用户级模型配置加密存储、文档上传与 Worker RAGFlow 轮询、Agent Runtime（prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话）、业务 API 的 chat 会话/消息/SSE 代理与 MySQL 落库、真实对话 UI（流式、思考、工具、引用、停止、重试）、知识库同步创建与软删除、文档软删除与清理、同库多文档批量授权（整体替换）。成员与组和审计日志 UI 仍为 mock。
+已实现：monorepo、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、用户级模型配置加密存储、文档上传与 Worker RAGFlow 轮询、Agent Runtime（prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话）、业务 API 的 chat 会话/消息/SSE 代理与 MySQL 落库、真实对话 UI（流式、思考、工具、引用、停止、重试）、知识库同步创建与软删除、文档软删除与清理、同库多文档批量授权（整体替换）、文档在线预览（知识库详情与聊天引用共用，PDF/DOCX/MD/TXT，ACL 校验 + Range）、成员/用户组查询与编辑（角色、状态、用户组、密码重置）、审计查询 API 与审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime。真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证。
 
-未实现：真实 RAGFlow 解析与检索 E2E（等 Redis/RAGFlow 环境）、本地成员/组编辑与密码重置、审计查询 API 与审计页接真、知识库设置修改、生产硬化、MCP/CLI、多租户 SaaS。
+未实现：Agent + 真实 LLM 的 RAG 回答/引用 E2E（当前 `model_configs` 为 0，需先配置模型）、RAGFlow 解析配置（chunk 大小/方法）修改、用户组增删改、生产硬化、MCP/CLI、多租户 SaaS。
 
 登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；模型配置在 `components/model-config`，通过左下角账号菜单打开。对话页在 `apps/web/components/chat-workspace.tsx`，通过 Web BFF 调用业务 API。
 
-管理端页面在 `apps/web/app/(admin)`：`knowledge` 与 `permissions` 已接真实 API；`members` 与 `audit` 仍是 mock，不要把这两页的可用人数或访问检查当成真实授权结果。
+管理端页面在 `apps/web/app/(admin)`：`knowledge`、`permissions`、`members`、`audit` 均已接真实 API。成员页的「可读文档」仍是前端预览，不是服务端按成员逐篇判定；成员编辑与密码重置仅 `tenant_admin` 可用。
 
-`pnpm test` 覆盖 ACL 纯策略、SSE 解析、Runtime faux 集成、kb_search ACL 过滤、API 会话归属/内部 ACL/模型配置/聊天重试/跨租户、知识库创建与软删除、文档删除清理、批量授权与 Worker 删除竞态；当前共 89 个测试，但不是完整端到端覆盖。真实 RAGFlow 检索和解析仍以环境可用性为准。
+`pnpm test` 覆盖 ACL 纯策略、SSE 解析、Runtime faux 集成、kb_search ACL 过滤、API 会话归属/内部 ACL/模型配置/聊天重试/跨租户、知识库创建与软删除、文档删除清理、批量授权、文档预览的 ACL/路径越界/软删除与 Range 解析、成员查询与编辑/最后管理员保护/密码重置清会话、审计查询过滤、知识库设置更新与检索参数、Worker 删除竞态；当前共 109 个测试，但不是完整端到端覆盖。真实 RAGFlow 解析/检索已用 MD/TXT/PDF/DOCX 验证；Agent + 真实 LLM 的端到端回答仍待模型配置。

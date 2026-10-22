@@ -2,6 +2,7 @@ import type {
   AccessCheckResponse,
   ApiErrorBody,
   ApiErrorCode,
+  AuditLogListResponse,
   BatchUpdateDocumentAclRequest,
   BatchUpdateDocumentAclResponse,
   ChatMessagesResponse,
@@ -13,6 +14,8 @@ import type {
   CreateModelConfigRequest,
   DocumentListResponse,
   KnowledgeBaseListResponse,
+  MemberListResponse,
+  MemberResponse,
   ModelConfigListResponse,
   ModelConfigResponse,
   ReparseDocumentResponse,
@@ -22,6 +25,9 @@ import type {
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclRequest,
   UpdateKnowledgeBaseAclResponse,
+  UpdateKnowledgeBaseRequest,
+  UpdateKnowledgeBaseResponse,
+  UpdateMemberRequest,
   UpdateModelConfigRequest,
   UploadDocumentResponse,
 } from "@pichat/shared";
@@ -124,6 +130,13 @@ export function createKnowledgeBase(input: CreateKnowledgeBaseRequest) {
   });
 }
 
+export function updateKnowledgeBase(knowledgeBaseId: string, input: UpdateKnowledgeBaseRequest) {
+  return apiRequest<UpdateKnowledgeBaseResponse>(
+    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`,
+    { method: "PATCH", body: jsonBody(input) },
+  );
+}
+
 export function deleteKnowledgeBase(knowledgeBaseId: string) {
   return apiRequest<void>(`/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`, {
     method: "DELETE",
@@ -171,6 +184,43 @@ export function checkDocumentAccess(documentId: string) {
     method: "POST",
     body: jsonBody({ documentId }),
   });
+}
+
+export function fetchMembers() {
+  return apiRequest<MemberListResponse>("/api/members");
+}
+
+export function updateMember(memberId: string, input: UpdateMemberRequest) {
+  return apiRequest<MemberResponse>(`/api/members/${encodeURIComponent(memberId)}`, {
+    method: "PATCH",
+    body: jsonBody(input),
+  });
+}
+
+export function resetMemberPassword(memberId: string, password: string) {
+  return apiRequest<void>(`/api/members/${encodeURIComponent(memberId)}/password`, {
+    method: "POST",
+    body: jsonBody({ password }),
+  });
+}
+
+export function fetchAuditLogs(
+  params: {
+    limit?: number;
+    action?: string;
+    resourceType?: string;
+    result?: string;
+    actorId?: string;
+  } = {},
+) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) {
+      search.set(key, String(value));
+    }
+  }
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return apiRequest<AuditLogListResponse>(`/api/audit-logs${suffix}`);
 }
 
 export function fetchModelConfigs() {

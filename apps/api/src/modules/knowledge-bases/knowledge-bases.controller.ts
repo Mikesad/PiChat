@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Inject,
   Param,
+  Patch,
   Post,
   Put,
   Req,
@@ -24,6 +25,8 @@ import type {
   SessionUser,
   UpdateKnowledgeBaseAclRequest,
   UpdateKnowledgeBaseAclResponse,
+  UpdateKnowledgeBaseRequest,
+  UpdateKnowledgeBaseResponse,
   UploadDocumentResponse,
 } from "@pichat/shared";
 import type { FastifyRequest } from "fastify";
@@ -48,6 +51,14 @@ const createKnowledgeBaseSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4000).optional(),
   embeddingModel: z.string().trim().max(120).optional(),
+});
+
+const updateKnowledgeBaseSchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().trim().max(4000).optional(),
+  retrievalTopK: z.number().int().min(1).max(50).optional(),
+  retrievalSimilarityThreshold: z.number().min(0).max(1).optional(),
+  retrievalVectorWeight: z.number().min(0).max(1).optional(),
 });
 
 const aclExceptionSchema = z.object({
@@ -82,6 +93,16 @@ export class KnowledgeBasesController {
   ): Promise<CreateKnowledgeBaseResponse> {
     const input = parseBody<CreateKnowledgeBaseRequest>(createKnowledgeBaseSchema, body);
     return { knowledgeBase: await this.knowledgeBasesService.create(user, input) };
+  }
+
+  @Patch(":id")
+  async update(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @CurrentUser() user: SessionUser,
+  ): Promise<UpdateKnowledgeBaseResponse> {
+    const input = parseBody<UpdateKnowledgeBaseRequest>(updateKnowledgeBaseSchema, body);
+    return { knowledgeBase: await this.knowledgeBasesService.update(id, user, input) };
   }
 
   @Get(":id/documents")

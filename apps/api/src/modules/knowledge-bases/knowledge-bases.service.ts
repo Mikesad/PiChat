@@ -26,6 +26,7 @@ import type {
   SessionUser,
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclResponse,
+  UpdateKnowledgeBaseRequest,
 } from "@pichat/shared";
 import { formatSizeLabel } from "@pichat/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
@@ -335,6 +336,106 @@ export class KnowledgeBasesService {
       throw notFound();
     }
     return summary;
+  }
+
+  async update(
+    id: string,
+    principal: SessionUser,
+    input: UpdateKnowledgeBaseRequest,
+  ): Promise<KnowledgeBaseSummary> {
+    if (!canManageAcl(principal.role)) {
+      throw forbidden();
+    }
+
+    const knowledgeBase = await this.findKnowledgeBase(id, principal.tenantId);
+    if (!knowledgeBase) {
+      throw notFound();
+    }
+
+    const changes: Partial<{
+      name: string;
+      description: string | null;
+      retrievalTopK: number;
+      retrievalSimilarityThreshold: number;
+      retrievalVectorWeight: number;
+    }> = {};
+
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (name.length === 0) {
+        throw invalidRequest("知识库名称不能为空");
+      }
+      if (name !== knowledgeBase.name) {
+        const existing = await this.db
+          .select({ id: knowledgeBases.id })
+          .from(knowledgeBases)
+          .where(
+            and(
+              eq(knowledgeBases.tenantId, principal.tenantId),
+              eq(knowledgeBases.name, name),
+              isNull(knowledgeBases.deletedAt),
+            ),
+          )
+          .limit(1);
+        if (existing.length > 0 && existing[0]?.id !== id) {
+          throw conflict("知识库名称已存在");
+        }
+        changes.name = name;
+      }
+    }
+
+    if (input.description !== undefined) {
+      changes.description = input.description.trim() || null;
+    }
+    if (input.retrievalTopK !== undefined) {
+      changes.retrievalTopK = Math.round(input.retrievalTopK);
+    }
+    if (input.retrievalSimilarityThreshold !== undefined) {
+      changes.retrievalSimilarityThreshold = input.retrievalSimilarityThreshold;
+    }
+    if (input.retrievalVectorWeight !== undefined) {
+      changes.retrievalVectorWeight = input.retrievalVectorWeight;
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return this.get(id, principal);
+    }
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(knowledgeBases)
+        .set(changes)
+        .where(
+          and(
+            eq(knowledgeBases.id, id),
+            eq(knowledgeBases.tenantId, principal.tenantId),
+            isNull(knowledgeBases.deletedAt),
+          ),
+        );
+
+      await tx.insert(auditLogs).values({
+        id: randomUUID(),
+        tenantId: principal.tenantId,
+        actorId: principal.id,
+        action: "knowledge_base.update",
+        resourceType: "knowledge_base",
+        resourceId: id,
+        metadata: {
+          actorId: principal.id,
+          result: "success",
+          name: changes.name ?? knowledgeBase.name,
+          changes: Object.keys(changes),
+          retrieval: {
+            topK: changes.retrievalTopK ?? knowledgeBase.retrievalTopK,
+            similarityThreshold:
+              changes.retrievalSimilarityThreshold ?? knowledgeBase.retrievalSimilarityThreshold,
+            vectorWeight: changes.retrievalVectorWeight ?? knowledgeBase.retrievalVectorWeight,
+          },
+        },
+      });
+    });
+
+    return this.get(id, principal);
   }
 
   async listDocuments(id: string, principal: SessionUser): Promise<DocumentSummary[]> {
@@ -914,6 +1015,9 @@ export class KnowledgeBasesService {
       description: knowledgeBase.description,
       embeddingModel: knowledgeBase.embeddingModel,
       ragflowDatasetId: knowledgeBase.ragflowDatasetId,
+      retrievalTopK: knowledgeBase.retrievalTopK,
+      retrievalSimilarityThreshold: knowledgeBase.retrievalSimilarityThreshold,
+      retrievalVectorWeight: knowledgeBase.retrievalVectorWeight,
       aclVersion: knowledgeBase.aclVersion,
       defaultSubjects,
       documentCount: documentRows.length,

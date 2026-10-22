@@ -82,6 +82,9 @@ describeWithDatabase("InternalAccessService", () => {
       name: "Policy",
       ragflowDatasetId: "ds-policy",
       embeddingModel: "bge-m3",
+      retrievalTopK: 9,
+      retrievalSimilarityThreshold: 0.4,
+      retrievalVectorWeight: 0.7,
       aclVersion: 1,
     });
     await db.insert(knowledgeBaseAcls).values({
@@ -149,6 +152,11 @@ describeWithDatabase("InternalAccessService", () => {
   it("returns only ready documents with a RAGFlow id for members", async () => {
     const result = await service.scope(member, [knowledgeBaseId]);
     expect(result.knowledgeBases).toHaveLength(1);
+    expect(result.knowledgeBases[0]?.retrieval).toEqual({
+      topK: 9,
+      similarityThreshold: 0.4,
+      vectorWeight: 0.7,
+    });
     expect(result.knowledgeBases[0]?.documents).toEqual([
       { id: docAllowed, title: "Allowed.pdf", ragflowDocumentId: "rf-allowed" },
     ]);

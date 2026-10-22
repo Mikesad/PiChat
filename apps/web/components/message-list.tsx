@@ -9,6 +9,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   selectedCitationId: string | null;
   onCitationSelect: (id: string) => void;
+  onCitationPreview: (citation: Citation) => void;
   onRetry: () => void;
   busy: boolean;
 }
@@ -17,6 +18,7 @@ export function MessageList({
   messages,
   selectedCitationId,
   onCitationSelect,
+  onCitationPreview,
   onRetry,
   busy,
 }: MessageListProps) {
@@ -33,6 +35,7 @@ export function MessageList({
                   message={message}
                   selectedCitationId={selectedCitationId}
                   onCitationSelect={onCitationSelect}
+                  onCitationPreview={onCitationPreview}
                   onRetry={onRetry}
                   busy={busy}
                 />
@@ -66,6 +69,7 @@ interface AssistantMessageProps {
   message: ChatMessage;
   selectedCitationId: string | null;
   onCitationSelect: (id: string) => void;
+  onCitationPreview: (citation: Citation) => void;
   onRetry: () => void;
   busy: boolean;
 }
@@ -74,6 +78,7 @@ function AssistantMessage({
   message,
   selectedCitationId,
   onCitationSelect,
+  onCitationPreview,
   onRetry,
   busy,
 }: AssistantMessageProps) {
@@ -135,6 +140,7 @@ function AssistantMessage({
             citations={message.citations}
             selectedId={selectedCitationId}
             onSelect={onCitationSelect}
+            onPreview={onCitationPreview}
           />
         ) : null}
 
@@ -378,10 +384,12 @@ function CitationsRow({
   citations,
   selectedId,
   onSelect,
+  onPreview,
 }: {
   citations: Citation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onPreview: (citation: Citation) => void;
 }) {
   return (
     <div className="mt-4">
@@ -393,29 +401,43 @@ function CitationsRow({
         {citations.map((citation) => {
           const selected = citation.id === selectedId;
           return (
-            <button
+            <div
               key={citation.id}
-              type="button"
-              onClick={() => onSelect(citation.id)}
-              aria-pressed={selected}
-              title={`${citation.documentTitle} · ${citation.knowledgeBaseName}`}
               className={cn(
-                "inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150",
+                "inline-flex max-w-full items-center rounded-full border pr-0.5 transition-colors duration-150",
                 selected
                   ? "border-accent bg-accent-soft text-fg"
                   : "border-border bg-surface text-muted hover:border-border-strong hover:text-fg",
               )}
             >
-              <span
-                className={cn(
-                  "flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums",
-                  selected ? "bg-accent text-accent-fg" : "bg-surface-2 text-subtle",
-                )}
+              <button
+                type="button"
+                onClick={() => onSelect(citation.id)}
+                aria-pressed={selected}
+                aria-label={`查看引用 ${citation.index}：${citation.documentTitle}`}
+                title={`${citation.documentTitle} · ${citation.knowledgeBaseName}`}
+                className="inline-flex max-w-full cursor-pointer items-center gap-1.5 py-1 pl-2.5"
               >
-                {citation.index}
-              </span>
-              <span className="max-w-[220px] truncate">{citation.documentTitle}</span>
-            </button>
+                <span
+                  className={cn(
+                    "flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums",
+                    selected ? "bg-accent text-accent-fg" : "bg-surface-2 text-subtle",
+                  )}
+                >
+                  {citation.index}
+                </span>
+                <span className="max-w-[220px] truncate text-xs">{citation.documentTitle}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onPreview(citation)}
+                aria-label={`预览原文 ${citation.index}：${citation.documentTitle}`}
+                title="查看原文"
+                className="ml-0.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-subtle transition-colors hover:bg-surface hover:text-accent-text"
+              >
+                <Icon name="eye" size={11} />
+              </button>
+            </div>
           );
         })}
       </div>

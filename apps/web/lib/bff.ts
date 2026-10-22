@@ -21,6 +21,8 @@ export async function proxyToApi(request: Request, path: string): Promise<Respon
   const contentType = request.headers.get("content-type");
   const cookie = request.headers.get("cookie");
   const accept = request.headers.get("accept");
+  const range = request.headers.get("range");
+  const ifRange = request.headers.get("if-range");
 
   if (contentType) {
     headers.set("content-type", contentType);
@@ -30,6 +32,12 @@ export async function proxyToApi(request: Request, path: string): Promise<Respon
   }
   if (accept) {
     headers.set("accept", accept);
+  }
+  if (range) {
+    headers.set("range", range);
+  }
+  if (ifRange) {
+    headers.set("if-range", ifRange);
   }
 
   let body: ArrayBuffer | undefined;
@@ -54,6 +62,18 @@ export async function proxyToApi(request: Request, path: string): Promise<Respon
   const responseContentType = upstream.headers.get("content-type");
   if (responseContentType) {
     responseHeaders.set("content-type", responseContentType);
+  }
+  for (const name of [
+    "accept-ranges",
+    "content-disposition",
+    "content-length",
+    "content-range",
+    "x-content-type-options",
+  ]) {
+    const value = upstream.headers.get(name);
+    if (value) {
+      responseHeaders.set(name, value);
+    }
   }
   if (responseContentType?.includes("text/event-stream")) {
     responseHeaders.set("cache-control", "no-cache, no-transform");

@@ -1,13 +1,17 @@
+import { createReadStream } from "node:fs";
 import {
   Body,
   Controller,
   Delete,
+  Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Inject,
   Param,
   Post,
   Put,
+  Res,
   UseGuards,
 } from "@nestjs/common";
 import type {
@@ -17,10 +21,12 @@ import type {
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
 } from "@pichat/shared";
+import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { parseBody } from "../../common/validation";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { SessionGuard } from "../auth/session.guard";
+import { contentDisposition, parseRangeHeader } from "./document-content";
 import { DocumentsService } from "./documents.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
@@ -41,6 +47,47 @@ export class DocumentsController {
     @Inject(KnowledgeBasesService) private readonly knowledgeBasesService: KnowledgeBasesService,
     @Inject(DocumentsService) private readonly documentsService: DocumentsService,
   ) {}
+
+  @Get(":id/content")
+  async content(
+    @Param("id") id: string,
+    @Headers("range") range: string | undefined,
+    @CurrentUser() user: SessionUser,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    const content = await this.documentsService.getContent(user, id);
+    const parsedRange = parseRangeHeader(range, content.sizeBytes);
+
+    reply.header("accept-ranges", "bytes");
+    reply.header("cache-control", "private, no-store");
+    reply.header("content-disposition", contentDisposition(content.fileName));
+    reply.header("content-type", content.mimeType);
+    reply.header("x-content-type-options", "nosniff");
+
+    if (parsedRange === "invalid") {
+      reply.header("content-range", `bytes */${content.sizeBytes}`);
+      reply.code(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE).send();
+      return;
+    }
+
+    if (parsedRange) {
+      reply.header("content-length", String(parsedRange.end - parsedRange.start + 1));
+      reply.header(
+        "content-range",
+        `bytes ${parsedRange.start}-${parsedRange.end}/${content.sizeBytes}`,
+      );
+      reply.code(HttpStatus.PARTIAL_CONTENT).send(
+        createReadStream(content.path, {
+          start: parsedRange.start,
+          end: parsedRange.end,
+        }),
+      );
+      return;
+    }
+
+    reply.header("content-length", String(content.sizeBytes));
+    reply.send(createReadStream(content.path));
+  }
 
   @Post(":id/reparse")
   @HttpCode(HttpStatus.OK)

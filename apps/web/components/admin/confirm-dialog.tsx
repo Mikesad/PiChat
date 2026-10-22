@@ -1,8 +1,8 @@
 "use client";
 
 import { type ReactNode, useEffect, useId, useState } from "react";
+import { useFocusTrap } from "../use-focus-trap";
 import { Button, inputClass } from "./ui";
-import { useFocusTrap } from "./use-focus-trap";
 
 interface ConfirmDialogProps {
   open: boolean;

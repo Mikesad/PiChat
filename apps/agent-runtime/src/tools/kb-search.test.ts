@@ -17,6 +17,7 @@ const config: RuntimeConfig = {
     topK: 6,
     maxTopK: 12,
     similarityThreshold: 0.2,
+    vectorWeight: 0.3,
     maxSnippetChars: 1200,
     maxResultChars: 12_000,
   },
@@ -62,6 +63,7 @@ function createContext() {
             id: "kb-1",
             name: "内部制度",
             ragflowDatasetId: "ds-1",
+            retrieval: { topK: 6, similarityThreshold: 0.2, vectorWeight: 0.3 },
             documents: [
               { id: "doc-1", title: "差旅制度.pdf", ragflowDocumentId: "rf-doc-1" },
               { id: "doc-2", title: "受限文档.pdf", ragflowDocumentId: "rf-doc-2" },
@@ -77,8 +79,10 @@ function createContext() {
     },
   } as unknown as AccessClient;
 
+  const retrieveCalls: Array<Record<string, unknown>> = [];
   const ragflow = {
-    async retrieve() {
+    async retrieve(input: Record<string, unknown>) {
+      retrieveCalls.push(input);
       return chunks;
     },
   } as unknown as RAGFlowClient;
@@ -92,6 +96,7 @@ function createContext() {
     },
     accessClient,
     ragflow,
+    retrieveCalls,
     citations: new CitationRegistry("msg-1"),
     config,
   };
@@ -122,7 +127,25 @@ describe("kb_search tool", () => {
       text: expect.stringContaining("[1]"),
     });
     expect(JSON.stringify(result)).not.toContain("rf-doc-1");
-    expect(JSON.stringify(result.content)).not.toContain("不应出现的内容");
+    expect(JSON.stringify(result.content)).not.toContain("��Ӧ���ֵ�����");
+    expect(context.retrieveCalls[0]).toMatchObject({
+      topK: 10,
+      similarityThreshold: 0.2,
+      vectorSimilarityWeight: 0.3,
+    });
+  });
+
+  it("uses knowledge base retrieval defaults when the model omits topK", async () => {
+    const context = createContext();
+    const tool = createKbSearchTool(context);
+
+    await tool.execute("call-3", { query: "住宿标准" }, undefined, undefined, undefined as never);
+
+    expect(context.retrieveCalls[0]).toMatchObject({
+      topK: 12,
+      similarityThreshold: 0.2,
+      vectorSimilarityWeight: 0.3,
+    });
   });
 
   it("returns an empty result when the user has no readable documents", async () => {
