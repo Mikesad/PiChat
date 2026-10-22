@@ -16,7 +16,8 @@ function errorResponse(status: number, message: string) {
 }
 
 export async function proxyToApi(request: Request, path: string): Promise<Response> {
-  const url = `${apiBaseUrl()}/${path.replace(/^\/+/, "")}`;
+  const search = new URL(request.url).search;
+  const url = `${apiBaseUrl()}/${path.replace(/^\/+/, "")}${search}`;
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   const cookie = request.headers.get("cookie");
