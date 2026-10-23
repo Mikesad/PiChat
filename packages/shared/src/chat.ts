@@ -10,9 +10,33 @@ export const chatCitationSchema = z.object({
   knowledgeBaseName: z.string(),
   chunkId: z.string(),
   snippet: z.string(),
+  used: z.boolean().optional(),
 });
 
 export type ChatCitation = z.infer<typeof chatCitationSchema>;
+
+const citationMarkerPattern = /\[(\d+)\]|【(\d+)】/g;
+
+export function extractCitationIndices(content: string): Set<number> {
+  const text = content.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+  const indices = new Set<number>();
+
+  for (const match of text.matchAll(citationMarkerPattern)) {
+    const index = Number(match[1] ?? match[2]);
+    if (Number.isSafeInteger(index) && index > 0) {
+      indices.add(index);
+    }
+  }
+
+  return indices;
+}
+
+export function resolveCitationUsage(citations: ChatCitation[], content: string): ChatCitation[] {
+  const used = extractCitationIndices(content);
+  return citations.map((citation) =>
+    citation.used === undefined ? { ...citation, used: used.has(citation.index) } : citation,
+  );
+}
 
 export const chatToolCallSchema = z.object({
   id: z.string(),

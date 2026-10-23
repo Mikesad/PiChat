@@ -5,7 +5,7 @@ import type {
   ChatUsage,
   RunEndData,
 } from "@pichat/shared";
-import { emptyChatUsage } from "@pichat/shared";
+import { emptyChatUsage, resolveCitationUsage } from "@pichat/shared";
 import { CitationRegistry } from "./citation-registry.js";
 
 export interface ToolStartInput {
@@ -110,7 +110,7 @@ export class RunState {
       content: this.content,
       thinking: this.thinking,
       tools: [...this.tools.values()],
-      citations: this.citations.all(),
+      citations: resolveCitationUsage(this.citations.all(), this.content),
       usage: this.usage,
       ...(this.error ? { error: this.error } : {}),
     };

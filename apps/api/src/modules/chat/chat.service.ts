@@ -22,6 +22,7 @@ import {
   createSseParser,
   emptyChatUsage,
   encodeSseEvent,
+  resolveCitationUsage,
   sseDataSchemas,
 } from "@pichat/shared";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
@@ -718,7 +719,10 @@ function buildFallbackRunEnd(
     content: accumulated.content,
     thinking: accumulated.thinking,
     tools: [...accumulated.tools.values()],
-    citations: [...accumulated.citations.values()].sort((left, right) => left.index - right.index),
+    citations: resolveCitationUsage(
+      [...accumulated.citations.values()].sort((left, right) => left.index - right.index),
+      accumulated.content,
+    ),
     usage: accumulated.usage,
     error: accumulated.error ?? {
       code: clientClosed ? "client_closed" : "stream_interrupted",

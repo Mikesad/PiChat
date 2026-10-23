@@ -23,6 +23,7 @@ export interface ChatMessage {
   thinking?: string;
   tools?: ToolCall[];
   citations?: Citation[];
+  candidateCitations?: Citation[];
   error?: string;
 }
 

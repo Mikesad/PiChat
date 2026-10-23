@@ -9,6 +9,7 @@ import type {
   ToolEndData,
   ToolStartData,
 } from "@pichat/shared";
+import { resolveCitationUsage } from "@pichat/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatRun,
@@ -96,26 +97,37 @@ export function ChatWorkspace() {
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const messages = activeSessionId ? (threads[activeSessionId] ?? []) : [];
 
-  const citations = useMemo(() => {
+  const citationState = useMemo(() => {
     const thread = activeSessionId ? (threads[activeSessionId] ?? []) : [];
     if (selectedCitationId) {
       for (const message of thread) {
-        if (
-          message.role === "assistant" &&
-          message.citations?.some((citation) => citation.id === selectedCitationId)
-        ) {
-          return message.citations;
+        if (message.role !== "assistant") {
+          continue;
+        }
+        const messageCitations = [
+          ...(message.citations ?? []),
+          ...(message.candidateCitations ?? []),
+        ];
+        if (messageCitations.some((citation) => citation.id === selectedCitationId)) {
+          return {
+            citations: message.citations ?? [],
+            candidates: message.candidateCitations ?? [],
+          };
         }
       }
     }
     for (let index = thread.length - 1; index >= 0; index -= 1) {
       const message = thread[index];
       if (message?.role === "assistant") {
-        return message.citations ?? [];
+        return {
+          citations: message.citations ?? [],
+          candidates: message.candidateCitations ?? [],
+        };
       }
     }
-    return [];
+    return { citations: [], candidates: [] };
   }, [threads, activeSessionId, selectedCitationId]);
+  const { citations, candidates } = citationState;
 
   const openSidebar = useCallback(() => {
     sidebarReturnFocusRef.current =
@@ -380,13 +392,18 @@ export function ChatWorkspace() {
             return;
           }
           updateMessage(sessionId, assistantId, (message) => {
-            const existing = message.citations ?? [];
-            if (existing.some((item) => item.id === citation.id)) {
+            const existing = message.candidateCitations ?? [];
+            if (
+              existing.some((item) => item.id === citation.id) ||
+              message.citations?.some((item) => item.id === citation.id)
+            ) {
               return message;
             }
             return {
               ...message,
-              citations: [...existing, citation].sort((left, right) => left.index - right.index),
+              candidateCitations: [...existing, citation].sort(
+                (left, right) => left.index - right.index,
+              ),
             };
           });
           break;
@@ -402,6 +419,7 @@ export function ChatWorkspace() {
         }
         case "run.end": {
           const end = data as unknown as RunEndData;
+          const resolved = resolveCitationUsage(end.citations ?? [], end.content);
           updateMessage(sessionId, assistantId, (message) => ({
             ...message,
             content: end.content,
@@ -413,7 +431,8 @@ export function ChatWorkspace() {
               status: tool.status,
               durationMs: tool.durationMs,
             })),
-            citations: end.citations ?? [],
+            citations: resolved.filter((citation) => citation.used === true),
+            candidateCitations: resolved.filter((citation) => citation.used !== true),
             status: toMessageStatus(end.status),
             error: end.error?.message,
           }));
@@ -687,6 +706,7 @@ export function ChatWorkspace() {
           >
             <CitationsPanel
               citations={citations}
+              candidates={candidates}
               selectedId={selectedCitationId}
               onSelect={handleCitationSelect}
               onPreview={handleCitationPreview}
@@ -714,6 +734,7 @@ export function ChatWorkspace() {
           >
             <CitationsPanel
               citations={citations}
+              candidates={candidates}
               selectedId={selectedCitationId}
               onSelect={handleCitationSelect}
               onPreview={handleCitationPreview}
@@ -768,6 +789,7 @@ function toUiMessage(message: ChatMessageSummary): ChatMessage {
   }
 
   const metadata = message.metadata;
+  const resolved = resolveCitationUsage(metadata?.citations ?? [], message.content);
   return {
     id: message.id,
     role: "assistant",
@@ -776,7 +798,8 @@ function toUiMessage(message: ChatMessageSummary): ChatMessage {
     status: toMessageStatus(metadata?.status),
     thinking: metadata?.thinking ?? "",
     tools: (metadata?.tools ?? []).map(toUiTool),
-    citations: metadata?.citations ?? [],
+    citations: resolved.filter((citation) => citation.used === true),
+    candidateCitations: resolved.filter((citation) => citation.used !== true),
     error: metadata?.error?.message,
   };
 }
