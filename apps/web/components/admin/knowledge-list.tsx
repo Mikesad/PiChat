@@ -1,5 +1,6 @@
 "use client";
 
+import { defaultPageSize, type PaginationMeta } from "@pichat/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -8,6 +9,8 @@ import { useAuth } from "../auth/auth-provider";
 import { Icon, Spinner } from "../icons";
 import { useAdminData } from "./admin-data";
 import { CreateKnowledgeDrawer } from "./create-knowledge-drawer";
+import { useDirectory } from "./directory";
+import { Pagination } from "./pagination";
 import {
   Badge,
   Button,
@@ -26,10 +29,13 @@ import {
 
 export function KnowledgeListPage() {
   const { knowledgeBases, status, error, reload } = useAdminData();
+  const { subjectName } = useDirectory();
   const { user } = useAuth();
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
   const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
 
   const filtered = useMemo(() => {
@@ -43,6 +49,24 @@ export function KnowledgeListPage() {
         knowledgeBase.description.toLowerCase().includes(normalized),
     );
   }, [knowledgeBases, query]);
+
+  const pagination: PaginationMeta = useMemo(() => {
+    const totalPages = filtered.length === 0 ? 0 : Math.ceil(filtered.length / pageSize);
+    const currentPage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+    return {
+      page: currentPage,
+      pageSize,
+      total: filtered.length,
+      totalPages,
+      hasNext: currentPage < totalPages,
+      hasPrevious: currentPage > 1,
+    };
+  }, [filtered.length, page, pageSize]);
+
+  const pagedKnowledgeBases = useMemo(() => {
+    const offset = (pagination.page - 1) * pageSize;
+    return filtered.slice(offset, offset + pageSize);
+  }, [filtered, pageSize, pagination.page]);
 
   const totals = useMemo(() => {
     let documents = 0;
@@ -138,14 +162,13 @@ export function KnowledgeListPage() {
         ]}
       />
 
-      <InfoBanner tone="neutral" icon="database" title="解析与权限分工">
-        RAGFlow 只负责文档解析与检索；文档级读取和拒绝规则由 PiChat 管理。
-      </InfoBanner>
-
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SearchInput
           value={query}
-          onChange={setQuery}
+          onChange={(value) => {
+            setQuery(value);
+            setPage(1);
+          }}
           placeholder="搜索知识库"
           label="搜索知识库"
         />
@@ -163,7 +186,7 @@ export function KnowledgeListPage() {
               description={
                 canManage
                   ? "创建知识库后即可上传文档并配置默认访问范围。"
-                  : "请联系管理员为你的账号或用户组授予读取权限。"
+                  : "请联系管理员为你的账号或部门授予读取权限。"
               }
               action={
                 canManage ? (
@@ -195,7 +218,7 @@ export function KnowledgeListPage() {
               footer={
                 <>
                   <span>
-                    共 {filtered.length} 个知识库 · {totals.documents} 篇文档
+                    当前页 {pagedKnowledgeBases.length} 个 · 共 {filtered.length} 个
                   </span>
                   <span>默认范围对全库文档生效</span>
                 </>
@@ -214,7 +237,7 @@ export function KnowledgeListPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((knowledgeBase) => {
+                {pagedKnowledgeBases.map((knowledgeBase) => {
                   const stats = documentStats(knowledgeBase);
                   const denyCount = knowledgeBase.documents.filter((document) =>
                     document.exceptions.some((exception) => exception.permission === "deny"),
@@ -255,7 +278,8 @@ export function KnowledgeListPage() {
                         </p>
                       </td>
                       <td className={tdClass}>
-                        {knowledgeBase.defaultSubjects.length === 0 ? (
+                        {knowledgeBase.defaultSubjects.length === 0 &&
+                        knowledgeBase.deniedSubjects.length === 0 ? (
                           <Badge tone="warning">未设置</Badge>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1">
@@ -270,10 +294,15 @@ export function KnowledgeListPage() {
                                 +{knowledgeBase.defaultSubjects.length - 2}
                               </span>
                             ) : null}
+                            {knowledgeBase.deniedSubjects.length > 0 ? (
+                              <Badge tone="danger">
+                                禁止 {knowledgeBase.deniedSubjects.length}
+                              </Badge>
+                            ) : null}
                           </div>
                         )}
                         <p className="mt-1 max-w-[180px] truncate text-[11px] text-subtle">
-                          {defaultAccessLabel(knowledgeBase)}
+                          {defaultAccessLabel(knowledgeBase, subjectName)}
                         </p>
                       </td>
                       <td className={tdClass}>
@@ -306,7 +335,7 @@ export function KnowledgeListPage() {
           </div>
 
           <ul className="space-y-2 xl:hidden">
-            {filtered.map((knowledgeBase) => {
+            {pagedKnowledgeBases.map((knowledgeBase) => {
               const stats = documentStats(knowledgeBase);
               return (
                 <li key={knowledgeBase.id}>
@@ -338,14 +367,18 @@ export function KnowledgeListPage() {
                       <span>{stats.withExceptions} 篇有例外</span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1">
-                      {knowledgeBase.defaultSubjects.length === 0 ? (
+                      {knowledgeBase.defaultSubjects.length === 0 &&
+                      knowledgeBase.deniedSubjects.length === 0 ? (
                         <Badge tone="warning">未设置默认访问</Badge>
                       ) : (
-                        knowledgeBase.defaultSubjects
-                          .slice(0, 3)
-                          .map((subject) => (
+                        <>
+                          {knowledgeBase.defaultSubjects.slice(0, 3).map((subject) => (
                             <SubjectChip key={`${subject.type}-${subject.id}`} subject={subject} />
-                          ))
+                          ))}
+                          {knowledgeBase.deniedSubjects.length > 0 ? (
+                            <Badge tone="danger">禁止 {knowledgeBase.deniedSubjects.length}</Badge>
+                          ) : null}
+                        </>
                       )}
                     </div>
                   </Link>
@@ -353,6 +386,15 @@ export function KnowledgeListPage() {
               );
             })}
           </ul>
+
+          <Pagination
+            pagination={pagination}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
         </>
       )}
 

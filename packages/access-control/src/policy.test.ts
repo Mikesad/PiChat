@@ -10,7 +10,7 @@ import type { AccessPrincipal, AclEntry, KnowledgeBaseAclEntry } from "./types.j
 const principal: AccessPrincipal = {
   tenantId: "tenant-1",
   userId: "user-1",
-  groupIds: ["group-1"],
+  departmentId: "group-1",
   role: "member",
 };
 
@@ -117,88 +117,121 @@ describe("effective document access policy", () => {
     },
   ];
 
-  it("applies the knowledge base default grant", () => {
-    expect(decideEffectiveDocumentAccess(defaults, [], principal, "doc-1", "kb-1")).toEqual({
-      allowed: true,
-      reason: "allowed",
-    });
+  function document(id: string, aclMode: "inherit" | "restricted" = "inherit") {
+    return { id, knowledgeBaseId: "kb-1", aclMode };
+  }
+
+  function exception(
+    documentId: string,
+    permission: "read" | "deny",
+    subjectType: "user" | "group" = "user",
+    subjectId = subjectType === "user" ? "user-1" : "group-1",
+  ): AclEntry {
+    return {
+      tenantId: "tenant-1",
+      documentId,
+      knowledgeBaseId: "kb-1",
+      subjectType,
+      subjectId,
+      permission,
+    };
+  }
+
+  it("allows an inherited document when the department can access the knowledge base", () => {
+    expect(
+      decideEffectiveDocumentAccess(defaults, [], principal, document("doc-1", "inherit")),
+    ).toEqual({ allowed: true, reason: "allowed" });
   });
 
-  it("applies a document read exception without a default grant", () => {
-    const exception: AclEntry[] = [
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-1",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "read",
-      },
-    ];
-    expect(decideEffectiveDocumentAccess([], exception, principal, "doc-1", "kb-1")).toEqual({
-      allowed: true,
-      reason: "allowed",
-    });
+  it("denies an inherited document when the department cannot access the knowledge base", () => {
+    const outsider: AccessPrincipal = { ...principal, departmentId: "group-2" };
+    expect(
+      decideEffectiveDocumentAccess(defaults, [], outsider, document("doc-1", "inherit")),
+    ).toEqual({ allowed: false, reason: "no_grant" });
   });
 
-  it("lets a document deny override the knowledge base default", () => {
-    const exception: AclEntry[] = [
+  it("does not let a document grant bypass the knowledge base permission", () => {
+    const outsider: AccessPrincipal = { ...principal, departmentId: "group-2" };
+    expect(
+      decideEffectiveDocumentAccess(
+        defaults,
+        [exception("doc-1", "read", "group", "group-2")],
+        outsider,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: false, reason: "no_grant" });
+  });
+
+  it("denies a restricted document without a matching document grant", () => {
+    expect(
+      decideEffectiveDocumentAccess(defaults, [], principal, document("doc-1", "restricted")),
+    ).toEqual({ allowed: false, reason: "no_grant" });
+  });
+
+  it("allows a restricted document with a matching department grant", () => {
+    expect(
+      decideEffectiveDocumentAccess(
+        defaults,
+        [exception("doc-1", "read", "group", "group-1")],
+        principal,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: true, reason: "allowed" });
+  });
+
+  it("allows a restricted document with a matching user grant", () => {
+    expect(
+      decideEffectiveDocumentAccess(
+        defaults,
+        [exception("doc-1", "read", "user", "user-1")],
+        principal,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: true, reason: "allowed" });
+  });
+
+  it("lets a document deny override a restricted document grant", () => {
+    expect(
+      decideEffectiveDocumentAccess(
+        defaults,
+        [exception("doc-1", "read"), exception("doc-1", "deny")],
+        principal,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: false, reason: "explicit_deny" });
+  });
+
+  it("lets a knowledge base deny override a document grant", () => {
+    const deniedDefaults: KnowledgeBaseAclEntry[] = [
+      ...defaults,
       {
         tenantId: "tenant-1",
-        documentId: "doc-1",
         knowledgeBaseId: "kb-1",
         subjectType: "group",
         subjectId: "group-1",
         permission: "deny",
       },
     ];
-    expect(decideEffectiveDocumentAccess(defaults, exception, principal, "doc-1", "kb-1")).toEqual({
-      allowed: false,
-      reason: "explicit_deny",
-    });
+    expect(
+      decideEffectiveDocumentAccess(
+        deniedDefaults,
+        [exception("doc-1", "read")],
+        principal,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: false, reason: "explicit_deny" });
   });
 
-  it("lets a user deny override a document group read", () => {
-    const exceptions: AclEntry[] = [
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-1",
-        knowledgeBaseId: "kb-1",
-        subjectType: "group",
-        subjectId: "group-1",
-        permission: "read",
-      },
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-1",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "deny",
-      },
-    ];
-    expect(decideEffectiveDocumentAccess([], exceptions, principal, "doc-1", "kb-1")).toEqual({
-      allowed: false,
-      reason: "explicit_deny",
-    });
-  });
-
-  it("lets a tenant_admin read everything", () => {
+  it("lets a tenant_admin read every document", () => {
     const admin: AccessPrincipal = { ...principal, role: "tenant_admin" };
-    const exception: AclEntry[] = [
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-1",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "deny",
-      },
-    ];
-    expect(decideEffectiveDocumentAccess([], exception, admin, "doc-1", "kb-1")).toEqual({
-      allowed: true,
-      reason: "role_override",
-    });
+    expect(
+      decideEffectiveDocumentAccess(
+        [],
+        [exception("doc-1", "deny")],
+        admin,
+        document("doc-1", "restricted"),
+      ),
+    ).toEqual({ allowed: true, reason: "role_override" });
   });
 
   it("ignores ACL entries from another tenant", () => {
@@ -211,64 +244,31 @@ describe("effective document access policy", () => {
         permission: "read",
       },
     ];
-    const foreignExceptions: AclEntry[] = [
-      {
-        tenantId: "tenant-2",
-        documentId: "doc-1",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "read",
-      },
-      {
-        tenantId: "tenant-2",
-        documentId: "doc-2",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "deny",
-      },
-    ];
     expect(
-      decideEffectiveDocumentAccess(foreignDefaults, foreignExceptions, principal, "doc-1", "kb-1"),
+      decideEffectiveDocumentAccess(foreignDefaults, [], principal, document("doc-1", "inherit")),
     ).toEqual({ allowed: false, reason: "no_grant" });
   });
 
-  it("denies when there is no default or exception grant", () => {
-    expect(decideEffectiveDocumentAccess(defaults, [], principal, "doc-1", "kb-2")).toEqual({
-      allowed: false,
-      reason: "no_grant",
-    });
+  it("fails closed for an unknown document mode", () => {
+    expect(
+      decideEffectiveDocumentAccess(defaults, [], principal, {
+        id: "doc-1",
+        knowledgeBaseId: "kb-1",
+        aclMode: "invalid" as "inherit",
+      }),
+    ).toEqual({ allowed: false, reason: "no_grant" });
   });
 
-  it("lists readable documents across defaults and exceptions", () => {
-    const exceptions: AclEntry[] = [
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-2",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "read",
-      },
-      {
-        tenantId: "tenant-1",
-        documentId: "doc-3",
-        knowledgeBaseId: "kb-1",
-        subjectType: "user",
-        subjectId: "user-1",
-        permission: "deny",
-      },
-    ];
+  it("lists readable documents using knowledge base permission and mode", () => {
     const documents = [
-      { id: "doc-1", knowledgeBaseId: "kb-1" },
-      { id: "doc-2", knowledgeBaseId: "kb-1" },
-      { id: "doc-3", knowledgeBaseId: "kb-1" },
-      { id: "doc-4", knowledgeBaseId: "kb-2" },
+      document("doc-inherit", "inherit"),
+      document("doc-restricted", "restricted"),
+      document("doc-restricted-granted", "restricted"),
     ];
+    const exceptions = [exception("doc-restricted-granted", "read", "group", "group-1")];
     expect(listEffectiveReadableDocumentIds(defaults, exceptions, principal, documents)).toEqual([
-      "doc-1",
-      "doc-2",
+      "doc-inherit",
+      "doc-restricted-granted",
     ]);
   });
 });

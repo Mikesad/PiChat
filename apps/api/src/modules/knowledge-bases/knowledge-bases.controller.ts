@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   UseGuards,
 } from "@nestjs/common";
@@ -20,6 +21,7 @@ import type {
   BatchUpdateDocumentAclResponse,
   CreateKnowledgeBaseRequest,
   CreateKnowledgeBaseResponse,
+  DocumentListResponse,
   KnowledgeBaseListResponse,
   KnowledgeBaseResponse,
   SessionUser,
@@ -32,6 +34,7 @@ import type {
 import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 import { invalidRequest } from "../../common/api-error";
+import { paginationSchema } from "../../common/pagination";
 import { parseBody } from "../../common/validation";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { SessionGuard } from "../auth/session.guard";
@@ -45,17 +48,21 @@ const aclSubjectSchema = z.object({
 
 const updateKnowledgeBaseAclSchema = z.object({
   defaultSubjects: z.array(aclSubjectSchema).max(200),
+  deniedSubjects: z.array(aclSubjectSchema).max(200).optional(),
 });
 
 const createKnowledgeBaseSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4000).optional(),
   embeddingModel: z.string().trim().max(120).optional(),
+  embeddingConfigId: z.string().min(1).max(64).optional(),
+  ownerDepartmentId: z.string().min(1).max(36).nullable().optional(),
 });
 
 const updateKnowledgeBaseSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   description: z.string().trim().max(4000).optional(),
+  ownerDepartmentId: z.string().min(1).max(36).nullable().optional(),
   retrievalTopK: z.number().int().min(1).max(50).optional(),
   retrievalSimilarityThreshold: z.number().min(0).max(1).optional(),
   retrievalVectorWeight: z.number().min(0).max(1).optional(),
@@ -73,6 +80,10 @@ const batchUpdateDocumentAclSchema = z.object({
   mode: z.literal("replace").optional(),
 });
 
+const listQuerySchema = paginationSchema.extend({
+  includeLocked: z.enum(["true", "false"]).optional(),
+});
+
 @Controller("knowledge-bases")
 @UseGuards(SessionGuard)
 export class KnowledgeBasesController {
@@ -82,8 +93,12 @@ export class KnowledgeBasesController {
   ) {}
 
   @Get()
-  async list(@CurrentUser() user: SessionUser): Promise<KnowledgeBaseListResponse> {
-    return { knowledgeBases: await this.knowledgeBasesService.list(user) };
+  async list(
+    @CurrentUser() user: SessionUser,
+    @Query() query: unknown,
+  ): Promise<KnowledgeBaseListResponse> {
+    const input = parseBody(listQuerySchema, query);
+    return this.knowledgeBasesService.list(user, input.includeLocked === "true", input);
   }
 
   @Post()
@@ -106,8 +121,18 @@ export class KnowledgeBasesController {
   }
 
   @Get(":id/documents")
-  async documents(@Param("id") id: string, @CurrentUser() user: SessionUser) {
-    return { documents: await this.knowledgeBasesService.listDocuments(id, user) };
+  async documents(
+    @Param("id") id: string,
+    @CurrentUser() user: SessionUser,
+    @Query() query: unknown,
+  ): Promise<DocumentListResponse> {
+    const input = parseBody(listQuerySchema, query);
+    return this.knowledgeBasesService.listDocuments(
+      id,
+      user,
+      input.includeLocked === "true",
+      input,
+    );
   }
 
   @Post(":id/documents")
@@ -184,7 +209,12 @@ export class KnowledgeBasesController {
     @CurrentUser() user: SessionUser,
   ): Promise<UpdateKnowledgeBaseAclResponse> {
     const input = parseBody<UpdateKnowledgeBaseAclRequest>(updateKnowledgeBaseAclSchema, body);
-    return this.knowledgeBasesService.updateKnowledgeBaseAcl(user, id, input.defaultSubjects);
+    return this.knowledgeBasesService.updateKnowledgeBaseAcl(
+      user,
+      id,
+      input.defaultSubjects,
+      input.deniedSubjects,
+    );
   }
 }
 

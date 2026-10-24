@@ -9,8 +9,10 @@ import {
   auditLogs,
   createDatabase,
   type Database,
+  departments,
   documentAcls,
   documents,
+  knowledgeBaseAcls,
   knowledgeBases,
   tenants,
   users,
@@ -48,6 +50,7 @@ describeWithDatabase("documents upload service", () => {
   const otherTenantId = randomUUID();
   const adminId = randomUUID();
   const memberId = randomUUID();
+  const groupId = randomUUID();
   const knowledgeBaseId = randomUUID();
 
   const admin: SessionUser = {
@@ -56,7 +59,7 @@ describeWithDatabase("documents upload service", () => {
     email: "upload-admin@test.local",
     displayName: "Upload Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const member: SessionUser = {
     id: memberId,
@@ -64,7 +67,7 @@ describeWithDatabase("documents upload service", () => {
     email: "upload-member@test.local",
     displayName: "Upload Member",
     role: "member",
-    groupIds: [],
+    departmentId: groupId,
   };
 
   let db: Database;
@@ -112,6 +115,7 @@ describeWithDatabase("documents upload service", () => {
       { id: tenantId, name: "Upload Test", slug: tenantId },
       { id: otherTenantId, name: "Upload Other", slug: otherTenantId },
     ]);
+    await db.insert(departments).values({ id: groupId, tenantId, name: "Upload Department" });
     await db.insert(users).values([
       {
         id: adminId,
@@ -127,6 +131,7 @@ describeWithDatabase("documents upload service", () => {
         email: member.email,
         passwordHash: "scrypt$00$00",
         displayName: member.displayName,
+        departmentId: groupId,
       },
     ]);
     await db.insert(knowledgeBases).values({
@@ -137,6 +142,14 @@ describeWithDatabase("documents upload service", () => {
       ragflowDatasetId: "ds-upload",
       embeddingModel: "bge-m3",
       aclVersion: 1,
+    });
+    await db.insert(knowledgeBaseAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      subjectType: "group",
+      subjectId: groupId,
+      permission: "read",
     });
   });
 
@@ -187,6 +200,7 @@ describeWithDatabase("documents upload service", () => {
       title: "预览.md",
       sourceKey,
       status: "ready",
+      aclMode: "restricted",
       mimeType: "text/markdown",
       sizeBytes: Buffer.byteLength(body),
     });

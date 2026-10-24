@@ -1,11 +1,9 @@
 import type { AccessReason } from "./api.js";
-import type { ThinkingLevel, UserRole } from "./domain.js";
+import type { ThinkingLevel } from "./domain.js";
 
 export interface InternalPrincipal {
   tenantId: string;
   userId: string;
-  role: UserRole;
-  groupIds: string[];
 }
 
 export interface AccessScopeRequest {
@@ -23,6 +21,7 @@ export interface AccessScopeRetrievalSettings {
   topK: number;
   similarityThreshold: number;
   vectorWeight: number;
+  rerankModelId?: string | null;
 }
 
 export interface AccessScopeKnowledgeBase {
@@ -61,6 +60,12 @@ export interface ChatRunModel {
   apiKey: string;
 }
 
+export interface ChatRunWebSearchConfig {
+  provider: string;
+  apiKey: string;
+  proxy?: string;
+}
+
 export interface ChatRunRequest {
   runId: string;
   sessionId: string;
@@ -70,4 +75,7 @@ export interface ChatRunRequest {
   thinkingLevel: ThinkingLevel;
   history: ChatRunHistoryMessage[];
   prompt: string;
+  webSearch: boolean;
+  webSearchConfig?: ChatRunWebSearchConfig;
+  knowledgeBaseIds?: string[];
 }

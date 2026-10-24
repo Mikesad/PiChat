@@ -115,4 +115,94 @@ describe("RAGFlow client", () => {
       state: "ready",
     });
   });
+
+  it("lists and maps document chunks with pagination metadata", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        chunks: [
+          {
+            chunk_id: "chunk-1",
+            content_with_weight: "第一段内容",
+            docnm_kwd: "policy.pdf",
+            positions: null,
+            available: true,
+            "row_id()": 7,
+          },
+        ],
+        doc: { chunk_count: 12, chunk_method: "naive" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    const result = await client.listChunks("ds-1", "rf-doc-1", {
+      page: 2,
+      pageSize: 50,
+      chunkId: "chunk-1",
+      keywords: "住宿",
+    });
+
+    expect(result).toMatchObject({
+      total: 12,
+      chunkMethod: "naive",
+      chunks: [
+        {
+          id: "chunk-1",
+          content: "第一段内容",
+          documentId: "rf-doc-1",
+          documentKeyword: "policy.pdf",
+          positions: [],
+          available: true,
+          rowId: 7,
+        },
+      ],
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "http://ragflow/api/v1/datasets/ds-1/documents/rf-doc-1/chunks?page=2&page_size=50&id=chunk-1&keywords=%E4%BD%8F%E5%AE%BF",
+    );
+  });
+
+  it("sends rerank_id when a rerank model is configured", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ chunks: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    await client.retrieve({
+      question: "住宿标准",
+      datasetIds: ["ds-1"],
+      rerankId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      rerank_id: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+    });
+  });
+
+  it("gets a single chunk from the dedicated endpoint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          chunk: {
+            chunk_id: "chunk-1",
+            content_with_weight: "片段内容",
+            available: false,
+          },
+        }),
+      ),
+    );
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    const chunk = await client.getChunk("ds-1", "rf-doc-1", "chunk-1");
+
+    expect(chunk).toMatchObject({
+      id: "chunk-1",
+      content: "片段内容",
+      documentId: "rf-doc-1",
+      available: false,
+    });
+  });
 });

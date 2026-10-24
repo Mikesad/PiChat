@@ -12,8 +12,6 @@ import {
   type Database,
   documentAcls,
   documents,
-  groupMembers,
-  groups,
   knowledgeBaseAcls,
   knowledgeBases,
   users,
@@ -89,13 +87,11 @@ export class AccessControlService {
     }
 
     const context = await this.getAclContext(principal.tenantId, document.knowledgeBaseId);
-    return decideEffectiveDocumentAccess(
-      context.defaults,
-      context.exceptions,
-      principal,
-      document.id,
-      document.knowledgeBaseId,
-    );
+    return decideEffectiveDocumentAccess(context.defaults, context.exceptions, principal, {
+      id: document.id,
+      knowledgeBaseId: document.knowledgeBaseId,
+      aclMode: document.aclMode,
+    });
   }
 
   async accessCheck(
@@ -108,17 +104,21 @@ export class AccessControlService {
     }
 
     const context = await this.getAclContext(principal.tenantId, document.knowledgeBaseId);
+    const documentRef = {
+      id: document.id,
+      knowledgeBaseId: document.knowledgeBaseId,
+      aclMode: document.aclMode,
+    };
     const decision = decideEffectiveDocumentAccess(
       context.defaults,
       context.exceptions,
       principal,
-      document.id,
-      document.knowledgeBaseId,
+      documentRef,
     );
     const principals = await this.loadActivePrincipals(principal.tenantId);
-    const effectiveReaderCount = this.countReaders(context, principals, document.knowledgeBaseId, [
+    const effectiveReaderCount = this.countReaders(context, principals, [documentRef]).get(
       document.id,
-    ]).get(document.id);
+    );
 
     return {
       allowed: decision.allowed,
@@ -136,9 +136,13 @@ export class AccessControlService {
     const context = await this.getAclContext(tenantId, document.knowledgeBaseId);
     const principals = await this.loadActivePrincipals(tenantId);
     return (
-      this.countReaders(context, principals, document.knowledgeBaseId, [document.id]).get(
-        document.id,
-      ) ?? 0
+      this.countReaders(context, principals, [
+        {
+          id: document.id,
+          knowledgeBaseId: document.knowledgeBaseId,
+          aclMode: document.aclMode,
+        },
+      ]).get(document.id) ?? 0
     );
   }
 
@@ -153,12 +157,7 @@ export class AccessControlService {
 
     const context = await this.getAclContext(tenantId, knowledgeBaseId);
     const principals = await this.loadActivePrincipals(tenantId);
-    return this.countReaders(
-      context,
-      principals,
-      knowledgeBaseId,
-      documentRefs.map((document) => document.id),
-    );
+    return this.countReaders(context, principals, documentRefs);
   }
 
   async getAclContext(tenantId: string, knowledgeBaseId: string): Promise<AclContext> {
@@ -231,7 +230,11 @@ export class AccessControlService {
     knowledgeBaseId: string,
   ): Promise<DocumentRef[]> {
     return this.db
-      .select({ id: documents.id, knowledgeBaseId: documents.knowledgeBaseId })
+      .select({
+        id: documents.id,
+        knowledgeBaseId: documents.knowledgeBaseId,
+        aclMode: documents.aclMode,
+      })
       .from(documents)
       .where(
         and(
@@ -261,53 +264,38 @@ export class AccessControlService {
 
   private async loadActivePrincipals(tenantId: string): Promise<AccessPrincipal[]> {
     const userRows = await this.db
-      .select({ id: users.id, role: users.role })
+      .select({ id: users.id, role: users.role, departmentId: users.departmentId })
       .from(users)
       .where(and(eq(users.tenantId, tenantId), eq(users.status, "active")));
-
-    const membershipRows = await this.db
-      .select({ userId: groupMembers.userId, groupId: groupMembers.groupId })
-      .from(groupMembers)
-      .innerJoin(groups, eq(groupMembers.groupId, groups.id))
-      .where(eq(groups.tenantId, tenantId));
-
-    const groupIdsByUser = new Map<string, string[]>();
-    for (const membership of membershipRows) {
-      const groupIds = groupIdsByUser.get(membership.userId) ?? [];
-      groupIds.push(membership.groupId);
-      groupIdsByUser.set(membership.userId, groupIds);
-    }
 
     return userRows.map((user) => ({
       tenantId,
       userId: user.id,
+      departmentId: user.departmentId,
       role: user.role,
-      groupIds: (groupIdsByUser.get(user.id) ?? []).sort(),
     }));
   }
 
   private countReaders(
     context: AclContext,
     principals: AccessPrincipal[],
-    knowledgeBaseId: string,
-    documentIds: string[],
+    documents: DocumentRef[],
   ): Map<string, number> {
     const counts = new Map<string, number>();
-    for (const documentId of documentIds) {
+    for (const document of documents) {
       let count = 0;
       for (const principal of principals) {
         const decision = decideEffectiveDocumentAccess(
           context.defaults,
           context.exceptions,
           principal,
-          documentId,
-          knowledgeBaseId,
+          document,
         );
         if (decision.allowed) {
           count += 1;
         }
       }
-      counts.set(documentId, count);
+      counts.set(document.id, count);
     }
     return counts;
   }
@@ -322,7 +310,7 @@ export class AccessControlService {
       knowledgeBaseId,
       aclVersion,
       principal.userId,
-      [...principal.groupIds].sort().join(","),
+      principal.departmentId ?? "",
     ].join(":");
   }
 }

@@ -7,10 +7,10 @@ import {
   type AclSubject,
   type DocumentStatus,
   statusMeta,
-  subjectName,
 } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName, Spinner } from "../icons";
+import { useDirectory } from "./directory";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md";
@@ -335,6 +335,70 @@ export function InfoBanner({
   );
 }
 
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+  className,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "bg-accent" : "bg-surface-3",
+        className,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none inline-block size-[18px] rounded-full bg-white shadow-card transition-transform duration-150",
+          checked ? "translate-x-[23px]" : "translate-x-[3px]",
+        )}
+      />
+    </button>
+  );
+}
+
+export function SwitchField({
+  checked,
+  onChange,
+  label,
+  description,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-fg">{label}</p>
+        {description ? (
+          <p className="mt-0.5 text-[11px] leading-5 text-subtle">{description}</p>
+        ) : null}
+      </div>
+      <Switch checked={checked} onChange={onChange} label={label} disabled={disabled} />
+    </div>
+  );
+}
+
 export const thClass =
   "whitespace-nowrap border-b border-border bg-surface-2/60 px-3 py-2.5 text-left text-[11px] font-medium tracking-wide text-subtle";
 export const tdClass = "border-b border-border px-3 py-3 align-middle";
@@ -445,6 +509,8 @@ export function SubjectChip({
   subject: AclSubject;
   permission?: AclPermission;
 }) {
+  const { subjectName } = useDirectory();
+
   return (
     <span
       className={cn(

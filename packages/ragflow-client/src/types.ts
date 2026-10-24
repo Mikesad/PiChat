@@ -11,6 +11,7 @@ export interface RetrievalInput {
   topK?: number;
   similarityThreshold?: number;
   vectorSimilarityWeight?: number;
+  rerankId?: string;
 }
 
 export interface RetrievalChunk {
@@ -92,4 +93,42 @@ export interface DocumentListInput {
   pageSize?: number;
   documentId?: string;
   keywords?: string;
+}
+
+export interface RAGFlowChunk {
+  id: string;
+  content: string;
+  documentId: string;
+  documentKeyword: string;
+  positions: string[];
+  available: boolean;
+  rowId?: number;
+}
+
+export interface RawRAGFlowChunk {
+  id?: string;
+  chunk_id?: string;
+  content?: string;
+  content_with_weight?: string;
+  document_id?: string;
+  docnm_kwd?: string;
+  document_keyword?: string;
+  positions?: unknown;
+  available_int?: number;
+  available?: boolean;
+  row_id?: number;
+  "row_id()"?: number;
+}
+
+export interface ChunkListInput {
+  page?: number;
+  pageSize?: number;
+  chunkId?: string;
+  keywords?: string;
+}
+
+export interface ChunkListResult {
+  chunks: RAGFlowChunk[];
+  total: number;
+  chunkMethod: string | null;
 }

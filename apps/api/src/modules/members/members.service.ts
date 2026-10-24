@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database, User } from "@pichat/db";
-import { auditLogs, authSessions, groupMembers, groups, hashPassword, users } from "@pichat/db";
+import { auditLogs, authSessions, departments, hashPassword, users } from "@pichat/db";
 import type {
+  DirectoryResponse,
   GroupSummary,
   MemberListResponse,
   MemberSummary,
@@ -10,9 +11,11 @@ import type {
   SessionUser,
   UpdateMemberRequest,
 } from "@pichat/shared";
-import { and, eq, inArray, max, ne } from "drizzle-orm";
+import { defaultPageSize } from "@pichat/shared";
+import { and, count, eq, inArray, max, ne } from "drizzle-orm";
 import { forbidden, invalidRequest, notFound } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
+import { buildPaginationMeta, type PaginationInput, pageOffset } from "../../common/pagination";
 
 export function canViewMembers(role: string): boolean {
   return role === "tenant_admin" || role === "security_admin";
@@ -34,12 +37,70 @@ function toIso(value: unknown): string | null {
 export class MembersService {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
-  async list(principal: SessionUser): Promise<MemberListResponse> {
+  async list(
+    principal: SessionUser,
+    pagination: PaginationInput = { page: 1, pageSize: defaultPageSize },
+  ): Promise<MemberListResponse> {
     if (!canViewMembers(principal.role)) {
       throw forbidden();
     }
 
-    const [userRows, groupRows, membershipRows, activityRows] = await Promise.all([
+    const [totalRows, userRows, departmentRows, departmentCounts] = await Promise.all([
+      this.db.select({ total: count() }).from(users).where(eq(users.tenantId, principal.tenantId)),
+      this.db
+        .select()
+        .from(users)
+        .where(eq(users.tenantId, principal.tenantId))
+        .orderBy(users.displayName, users.id)
+        .limit(pagination.pageSize)
+        .offset(pageOffset(pagination)),
+      this.db
+        .select()
+        .from(departments)
+        .where(eq(departments.tenantId, principal.tenantId))
+        .orderBy(departments.name),
+      this.loadDepartmentCounts(principal.tenantId),
+    ]);
+    const total = totalRows[0]?.total ?? 0;
+
+    const userIds = userRows.map((row) => row.id);
+    const activityRows =
+      userIds.length > 0
+        ? await this.db
+            .select({ userId: authSessions.userId, lastActiveAt: max(authSessions.lastUsedAt) })
+            .from(authSessions)
+            .where(
+              and(
+                eq(authSessions.tenantId, principal.tenantId),
+                inArray(authSessions.userId, userIds),
+              ),
+            )
+            .groupBy(authSessions.userId)
+        : [];
+
+    const lastActiveByUser = new Map(
+      activityRows.map((row) => [row.userId, toIso(row.lastActiveAt)] as const),
+    );
+
+    const members = userRows.map((row) =>
+      this.toSummary(row, lastActiveByUser.get(row.id) ?? null),
+    );
+    const groupSummaries: GroupSummary[] = departmentRows.map((group) => ({
+      id: group.id,
+      name: group.name,
+      externalId: group.externalId,
+      memberCount: departmentCounts.get(group.id) ?? 0,
+    }));
+
+    return {
+      members,
+      groups: groupSummaries,
+      pagination: buildPaginationMeta(pagination, total),
+    };
+  }
+
+  async directory(principal: SessionUser): Promise<DirectoryResponse> {
+    const [userRows, departmentRows, activeDepartmentCounts] = await Promise.all([
       this.db
         .select()
         .from(users)
@@ -47,53 +108,44 @@ export class MembersService {
         .orderBy(users.displayName),
       this.db
         .select()
-        .from(groups)
-        .where(eq(groups.tenantId, principal.tenantId))
-        .orderBy(groups.name),
-      this.db
-        .select({ userId: groupMembers.userId, groupId: groupMembers.groupId })
-        .from(groupMembers)
-        .innerJoin(groups, eq(groupMembers.groupId, groups.id))
-        .where(eq(groups.tenantId, principal.tenantId)),
-      this.db
-        .select({ userId: authSessions.userId, lastActiveAt: max(authSessions.lastUsedAt) })
-        .from(authSessions)
-        .where(eq(authSessions.tenantId, principal.tenantId))
-        .groupBy(authSessions.userId),
+        .from(departments)
+        .where(eq(departments.tenantId, principal.tenantId))
+        .orderBy(departments.name),
+      this.loadDepartmentCounts(principal.tenantId, true),
     ]);
 
-    const groupIdsByUser = new Map<string, string[]>();
-    for (const membership of membershipRows) {
-      const current = groupIdsByUser.get(membership.userId) ?? [];
-      current.push(membership.groupId);
-      groupIdsByUser.set(membership.userId, current);
-    }
-    const lastActiveByUser = new Map(
-      activityRows.map((row) => [row.userId, toIso(row.lastActiveAt)] as const),
-    );
-    const memberCountByGroup = new Map<string, number>();
-    for (const membership of membershipRows) {
-      memberCountByGroup.set(
-        membership.groupId,
-        (memberCountByGroup.get(membership.groupId) ?? 0) + 1,
-      );
-    }
+    return {
+      members: userRows.map((row) => ({
+        id: row.id,
+        displayName: row.displayName,
+        role: row.role,
+        status: row.status,
+        departmentId: row.departmentId,
+      })),
+      groups: departmentRows.map((group) => ({
+        id: group.id,
+        name: group.name,
+        memberCount: activeDepartmentCounts.get(group.id) ?? 0,
+      })),
+    };
+  }
 
-    const members = userRows.map((row) =>
-      this.toSummary(
-        row,
-        (groupIdsByUser.get(row.id) ?? []).sort(),
-        lastActiveByUser.get(row.id) ?? null,
-      ),
+  private async loadDepartmentCounts(
+    tenantId: string,
+    activeOnly = false,
+  ): Promise<Map<string, number>> {
+    const conditions = [eq(users.tenantId, tenantId)];
+    if (activeOnly) {
+      conditions.push(eq(users.status, "active"));
+    }
+    const rows = await this.db
+      .select({ departmentId: users.departmentId, total: count() })
+      .from(users)
+      .where(and(...conditions))
+      .groupBy(users.departmentId);
+    return new Map(
+      rows.flatMap((row) => (row.departmentId ? [[row.departmentId, row.total] as const] : [])),
     );
-    const groupSummaries: GroupSummary[] = groupRows.map((group) => ({
-      id: group.id,
-      name: group.name,
-      externalId: group.externalId,
-      memberCount: memberCountByGroup.get(group.id) ?? 0,
-    }));
-
-    return { members, groups: groupSummaries };
   }
 
   async update(
@@ -123,45 +175,32 @@ export class MembersService {
       await this.ensureAnotherTenantAdmin(target.id, principal.tenantId);
     }
 
-    let nextGroupIds: string[] | undefined;
-    if (input.groupIds !== undefined) {
-      nextGroupIds = [...new Set(input.groupIds)];
-      if (nextGroupIds.length > 0) {
-        const groupRows = await this.db
-          .select({ id: groups.id })
-          .from(groups)
-          .where(and(eq(groups.tenantId, principal.tenantId), inArray(groups.id, nextGroupIds)));
-        if (groupRows.length !== nextGroupIds.length) {
-          throw invalidRequest("包含不属于当前租户的用户组");
+    let nextDepartmentId: string | null | undefined;
+    if (input.departmentId !== undefined) {
+      nextDepartmentId = input.departmentId?.trim() || null;
+      if (nextDepartmentId) {
+        const departmentRows = await this.db
+          .select({ id: departments.id })
+          .from(departments)
+          .where(
+            and(eq(departments.tenantId, principal.tenantId), eq(departments.id, nextDepartmentId)),
+          )
+          .limit(1);
+        if (!departmentRows[0]) {
+          throw invalidRequest("部门不属于当前租户");
         }
       }
     }
 
-    const beforeGroupIds = await this.groupIdsForUser(target.id, principal.tenantId);
-
     await this.db.transaction(async (tx) => {
-      if (input.role !== undefined || input.status !== undefined) {
-        await tx
-          .update(users)
-          .set({
-            ...(input.role !== undefined ? { role: input.role } : {}),
-            ...(input.status !== undefined ? { status: input.status } : {}),
-          })
-          .where(and(eq(users.id, target.id), eq(users.tenantId, principal.tenantId)));
-      }
-
-      if (nextGroupIds !== undefined) {
-        await tx.delete(groupMembers).where(eq(groupMembers.userId, target.id));
-        if (nextGroupIds.length > 0) {
-          await tx.insert(groupMembers).values(
-            nextGroupIds.map((groupId) => ({
-              id: randomUUID(),
-              groupId,
-              userId: target.id,
-            })),
-          );
-        }
-      }
+      await tx
+        .update(users)
+        .set({
+          ...(input.role !== undefined ? { role: input.role } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(nextDepartmentId !== undefined ? { departmentId: nextDepartmentId } : {}),
+        })
+        .where(and(eq(users.id, target.id), eq(users.tenantId, principal.tenantId)));
 
       await tx.insert(auditLogs).values({
         id: randomUUID(),
@@ -177,12 +216,12 @@ export class MembersService {
           before: {
             role: target.role,
             status: target.status,
-            groupIds: beforeGroupIds,
+            departmentId: target.departmentId,
           },
           after: {
             role: input.role ?? target.role,
             status: input.status ?? target.status,
-            groupIds: nextGroupIds ?? beforeGroupIds,
+            departmentId: nextDepartmentId !== undefined ? nextDepartmentId : target.departmentId,
           },
         },
       });
@@ -192,11 +231,7 @@ export class MembersService {
     if (!updated) {
       throw notFound();
     }
-    return this.toSummary(
-      updated,
-      await this.groupIdsForUser(updated.id, principal.tenantId),
-      await this.lastActiveAt(updated.id, principal.tenantId),
-    );
+    return this.toSummary(updated, await this.lastActiveAt(updated.id, principal.tenantId));
   }
 
   async resetPassword(
@@ -245,15 +280,6 @@ export class MembersService {
     return rows[0] ?? null;
   }
 
-  private async groupIdsForUser(userId: string, tenantId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ groupId: groupMembers.groupId })
-      .from(groupMembers)
-      .innerJoin(groups, eq(groupMembers.groupId, groups.id))
-      .where(and(eq(groupMembers.userId, userId), eq(groups.tenantId, tenantId)));
-    return rows.map((row) => row.groupId).sort();
-  }
-
   private async lastActiveAt(userId: string, tenantId: string): Promise<string | null> {
     const rows = await this.db
       .select({ lastActiveAt: max(authSessions.lastUsedAt) })
@@ -280,14 +306,14 @@ export class MembersService {
     }
   }
 
-  private toSummary(user: User, groupIds: string[], lastActiveAt: string | null): MemberSummary {
+  private toSummary(user: User, lastActiveAt: string | null): MemberSummary {
     return {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
       role: user.role,
       status: user.status,
-      groupIds,
+      departmentId: user.departmentId,
       lastActiveAt,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),

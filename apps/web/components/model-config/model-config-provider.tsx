@@ -1,6 +1,11 @@
 "use client";
 
-import type { CreateModelConfigRequest, ModelConfigSummary, ModelProviderId } from "@pichat/shared";
+import type {
+  CreateModelConfigRequest,
+  ModelConfigSummary,
+  ModelKind,
+  ModelProviderId,
+} from "@pichat/shared";
 import {
   createContext,
   type ReactNode,
@@ -24,6 +29,7 @@ import { ModelConfigDrawer } from "./model-config-drawer";
 
 export interface SaveModelConfigInput {
   id?: string;
+  kind: ModelKind;
   provider: ModelProviderId;
   apiKey?: string;
   baseUrl: string;
@@ -34,6 +40,9 @@ export interface SaveModelConfigInput {
 
 interface ModelConfigContextValue {
   configs: ModelConfigSummary[];
+  chatConfigs: ModelConfigSummary[];
+  embeddingConfigs: ModelConfigSummary[];
+  rerankConfigs: ModelConfigSummary[];
   defaultConfigId: string | null;
   activeConfig: ModelConfigSummary | null;
   ready: boolean;
@@ -94,6 +103,7 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
 
   const saveConfig = useCallback(async (input: SaveModelConfigInput) => {
     const payload: CreateModelConfigRequest = {
+      kind: input.kind,
       provider: input.provider,
       modelId: input.modelId.trim(),
       displayName: input.displayName.trim(),
@@ -120,7 +130,11 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
       const next = [...others, saved];
       return saved.isDefault
         ? next
-            .map((config) => (config.id === saved.id ? config : { ...config, isDefault: false }))
+            .map((config) =>
+              config.id === saved.id || config.kind !== saved.kind
+                ? config
+                : { ...config, isDefault: false },
+            )
             .sort(sortConfigs)
         : next.sort(sortConfigs);
     });
@@ -136,7 +150,15 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     const response = await setDefaultModelConfig(id);
     setConfigs((previous) =>
       previous
-        .map((config) => ({ ...config, isDefault: config.id === response.modelConfig.id }))
+        .map((config) => ({
+          ...config,
+          isDefault:
+            config.id === response.modelConfig.id
+              ? true
+              : config.kind === response.modelConfig.kind
+                ? false
+                : config.isDefault,
+        }))
         .sort(sortConfigs),
     );
   }, []);
@@ -144,19 +166,31 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const openConfig = useCallback(() => setIsOpen(true), []);
   const closeConfig = useCallback(() => setIsOpen(false), []);
 
-  const defaultConfigId = useMemo(
-    () => configs.find((config) => config.isDefault)?.id ?? null,
+  const chatConfigs = useMemo(() => configs.filter((config) => config.kind === "chat"), [configs]);
+  const embeddingConfigs = useMemo(
+    () => configs.filter((config) => config.kind === "embedding"),
     [configs],
   );
-  const activeConfig = useMemo(
-    () => configs.find((config) => config.isDefault) ?? configs[0] ?? null,
+  const rerankConfigs = useMemo(
+    () => configs.filter((config) => config.kind === "rerank"),
     [configs],
+  );
+  const defaultConfigId = useMemo(
+    () => chatConfigs.find((config) => config.isDefault)?.id ?? null,
+    [chatConfigs],
+  );
+  const activeConfig = useMemo(
+    () => chatConfigs.find((config) => config.isDefault) ?? chatConfigs[0] ?? null,
+    [chatConfigs],
   );
 
   return (
     <ModelConfigContext.Provider
       value={{
         configs,
+        chatConfigs,
+        embeddingConfigs,
+        rerankConfigs,
         defaultConfigId,
         activeConfig,
         ready,
@@ -177,6 +211,9 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
 }
 
 function sortConfigs(left: ModelConfigSummary, right: ModelConfigSummary) {
+  if (left.kind !== right.kind) {
+    return left.kind.localeCompare(right.kind);
+  }
   if (left.isDefault !== right.isDefault) {
     return left.isDefault ? -1 : 1;
   }

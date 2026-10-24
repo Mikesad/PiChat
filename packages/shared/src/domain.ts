@@ -1,6 +1,7 @@
 export type TenantId = string;
 export type UserId = string;
 export type GroupId = string;
+export type DepartmentId = string;
 export type KnowledgeBaseId = string;
 export type DocumentId = string;
 export type SessionId = string;
@@ -15,7 +16,7 @@ export interface Principal {
   tenantId: TenantId;
   userId: UserId;
   role: UserRole;
-  groupIds: GroupId[];
+  departmentId: DepartmentId | null;
 }
 
 export interface Citation {

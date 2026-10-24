@@ -34,7 +34,7 @@ export class AccessClient {
   ): Promise<AccessScopeResponse> {
     return this.post<AccessScopeResponse>(
       "/internal/access/scope",
-      { principal, ...(knowledgeBaseIds?.length ? { knowledgeBaseIds } : {}) },
+      { principal, ...(knowledgeBaseIds !== undefined ? { knowledgeBaseIds } : {}) },
       signal,
     );
   }

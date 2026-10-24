@@ -1,6 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+  Children,
+  type ComponentProps,
+  cloneElement,
+  createContext,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkCjkFriendly from "remark-cjk-friendly";
+import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage, Citation, ToolCall } from "@/lib/chat-data";
 import { cn, formatTime } from "@/lib/utils";
 import { Icon, LogoMark, Spinner } from "./icons";
@@ -85,69 +100,68 @@ function AssistantMessage({
   const waiting = message.status === "thinking" && !message.content;
 
   return (
-    <div className="flex gap-3">
-      <LogoMark className="mt-0.5" />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <p className="text-sm font-medium text-fg">PiChat</p>
-          <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-subtle">
-            知识库 Agent
-          </span>
-          <time dateTime={message.createdAt} className="text-[11px] tabular-nums text-subtle">
-            {formatTime(message.createdAt)}
-          </time>
-        </div>
+    <div className="flex flex-col">
+      <div className="flex gap-3">
+        <LogoMark />
+        <div className="min-w-0 flex-1">
+          <span className="sr-only">助手回答：</span>
 
-        {message.thinking ? (
-          <ThinkingBlock thinking={message.thinking} active={message.status === "thinking"} />
-        ) : null}
+          {message.thinking ? (
+            <ThinkingBlock thinking={message.thinking} active={message.status === "thinking"} />
+          ) : null}
 
-        {message.tools && message.tools.length > 0 ? <ToolCallList tools={message.tools} /> : null}
+          {message.tools && message.tools.length > 0 ? (
+            <ToolCallList tools={message.tools} />
+          ) : null}
 
-        {message.content ? (
-          <div className="mt-3">
-            <MessageText
-              message={message}
-              onCitationSelect={onCitationSelect}
-              selectedCitationId={selectedCitationId}
+          {message.content ? (
+            <div className="mt-3">
+              <MessageText
+                message={message}
+                onCitationSelect={onCitationSelect}
+                selectedCitationId={selectedCitationId}
+              />
+            </div>
+          ) : null}
+
+          {waiting ? (
+            <p className="mt-3 flex items-center gap-2 text-xs text-subtle" role="status">
+              <Spinner className="text-accent" />
+              正在检索并组织答案…
+            </p>
+          ) : null}
+
+          {message.status === "stopped" ? (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-warning">
+              <Icon name="alert-circle" size={13} />
+              已停止生成，可以重新发送或继续追问。
+            </p>
+          ) : null}
+
+          {message.status === "error" ? (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
+              <Icon name="alert-circle" size={13} />
+              {message.error ?? "生成失败，请重试。"}
+            </p>
+          ) : null}
+
+          {message.citations && message.citations.length > 0 ? (
+            <CitationsRow
+              citations={message.citations}
+              selectedId={selectedCitationId}
+              onSelect={onCitationSelect}
+              onPreview={onCitationPreview}
             />
-          </div>
-        ) : null}
+          ) : null}
 
-        {waiting ? (
-          <p className="mt-3 flex items-center gap-2 text-xs text-subtle" role="status">
-            <Spinner className="text-accent" />
-            正在检索并组织答案…
-          </p>
-        ) : null}
-
-        {message.status === "stopped" ? (
-          <p className="mt-3 flex items-center gap-1.5 text-xs text-warning">
-            <Icon name="alert-circle" size={13} />
-            已停止生成，可以重新发送或继续追问。
-          </p>
-        ) : null}
-
-        {message.status === "error" ? (
-          <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
-            <Icon name="alert-circle" size={13} />
-            {message.error ?? "生成失败，请重试。"}
-          </p>
-        ) : null}
-
-        {message.citations && message.citations.length > 0 ? (
-          <CitationsRow
-            citations={message.citations}
-            selectedId={selectedCitationId}
-            onSelect={onCitationSelect}
-            onPreview={onCitationPreview}
-          />
-        ) : null}
-
-        {message.content && message.status !== "thinking" ? (
-          <MessageActions content={message.content} onRetry={onRetry} retryDisabled={busy} />
-        ) : null}
+          {message.content && message.status !== "thinking" ? (
+            <MessageActions content={message.content} onRetry={onRetry} retryDisabled={busy} />
+          ) : null}
+        </div>
       </div>
+      <p className="mt-2 text-right text-[11px] tabular-nums text-subtle">
+        <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+      </p>
     </div>
   );
 }
@@ -156,7 +170,7 @@ function ThinkingBlock({ thinking, active }: { thinking: string; active: boolean
   return (
     <details
       open={active ? true : undefined}
-      className="group mt-2 rounded-lg border border-border bg-surface-2/60"
+      className="group rounded-lg border border-border bg-surface-2/60"
     >
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted transition-colors hover:text-fg [&::-webkit-details-marker]:hidden">
         <Icon name="sparkles" size={13} className="shrink-0 text-accent-text" />
@@ -222,6 +236,16 @@ function ToolCallList({ tools }: { tools: ToolCall[] }) {
   );
 }
 
+interface CitationInteraction {
+  citations?: Citation[];
+  onSelect: (id: string) => void;
+  selectedId: string | null;
+}
+
+const CitationInteractionContext = createContext<CitationInteraction | null>(null);
+
+const remarkPlugins = [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough];
+
 function MessageText({
   message,
   onCitationSelect,
@@ -231,53 +255,183 @@ function MessageText({
   onCitationSelect: (id: string) => void;
   selectedCitationId: string | null;
 }) {
-  const blocks = splitBlocks(message.content);
   const streaming = message.status === "streaming";
 
   return (
-    <div className="space-y-3 text-[15px] leading-7 text-fg">
-      {blocks.map((block, blockIndex) => {
-        const isLastBlock = blockIndex === blocks.length - 1;
-        const showCaret = streaming && isLastBlock;
-        const lines = block.text.split("\n");
-        const isList = lines.every((line) => line.startsWith("- "));
-
-        if (isList) {
-          return (
-            <ul key={block.key} className="list-disc space-y-1 pl-5 marker:text-subtle">
-              {lines.map((line, lineIndex) => (
-                <li key={line} className="pl-0.5">
-                  <CitationMarkers
-                    text={line.slice(2)}
-                    citations={message.citations}
-                    onSelect={onCitationSelect}
-                    selectedId={selectedCitationId}
-                  />
-                  {showCaret && lineIndex === lines.length - 1 ? <StreamingCaret /> : null}
-                </li>
-              ))}
-            </ul>
-          );
-        }
-
-        return (
-          <p key={block.key} className="whitespace-pre-wrap">
-            <CitationMarkers
-              text={block.text}
-              citations={message.citations}
-              onSelect={onCitationSelect}
-              selectedId={selectedCitationId}
-            />
-            {showCaret ? <StreamingCaret /> : null}
-          </p>
-        );
-      })}
+    <div
+      className={cn(
+        "message-markdown space-y-3 text-[15px] leading-7 text-fg",
+        streaming && "markdown-streaming",
+      )}
+    >
+      <CitationInteractionContext.Provider
+        value={{
+          citations: message.citations,
+          onSelect: onCitationSelect,
+          selectedId: selectedCitationId,
+        }}
+      >
+        <Markdown remarkPlugins={remarkPlugins} components={markdownComponents}>
+          {message.content}
+        </Markdown>
+      </CitationInteractionContext.Provider>
     </div>
   );
 }
 
-function StreamingCaret() {
-  return <span aria-hidden="true" className="streaming-caret" />;
+const markdownComponents: Components = {
+  p: ({ children }) => (
+    <p className="whitespace-pre-wrap">
+      <CitationChildren>{children}</CitationChildren>
+    </p>
+  ),
+  h1: ({ children }) => (
+    <h1 className="text-xl font-semibold leading-8 text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-lg font-semibold leading-7 text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-base font-semibold leading-7 text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="font-semibold text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h4>
+  ),
+  h5: ({ children }) => (
+    <h5 className="font-semibold text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h5>
+  ),
+  h6: ({ children }) => (
+    <h6 className="font-semibold text-fg">
+      <CitationChildren>{children}</CitationChildren>
+    </h6>
+  ),
+  ul: ({ children }) => <ul className="list-disc space-y-1 pl-5 marker:text-subtle">{children}</ul>,
+  ol: ({ children }) => (
+    <ol className="list-decimal space-y-1 pl-5 marker:text-subtle">{children}</ol>
+  ),
+  li: ({ children }) => (
+    <li className="pl-0.5">
+      <CitationChildren>{children}</CitationChildren>
+    </li>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-border-strong pl-3 text-muted">
+      <CitationChildren>{children}</CitationChildren>
+    </blockquote>
+  ),
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-accent-text underline underline-offset-2 hover:text-accent-hover"
+    >
+      <CitationChildren>{children}</CitationChildren>
+    </a>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-fg">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  del: ({ children }) => <del className="text-muted">{children}</del>,
+  code: MarkdownCode,
+  pre: MarkdownPre,
+  table: ({ children }) => (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-border bg-surface-2 px-3 py-1.5 text-left font-medium">
+      <CitationChildren>{children}</CitationChildren>
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-border px-3 py-1.5 align-top">
+      <CitationChildren>{children}</CitationChildren>
+    </td>
+  ),
+  hr: () => <hr className="border-border" />,
+};
+
+function CitationChildren({ children }: { children?: ReactNode }) {
+  const interaction = useContext(CitationInteractionContext);
+
+  if (!interaction) {
+    return <>{children}</>;
+  }
+
+  return (
+    <>
+      {withCitationMarkers(
+        children,
+        interaction.citations,
+        interaction.onSelect,
+        interaction.selectedId,
+      )}
+    </>
+  );
+}
+
+function MarkdownCode({ className, children }: ComponentProps<"code">) {
+  return (
+    <code
+      className={cn("rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[13px] text-fg", className)}
+    >
+      {children}
+    </code>
+  );
+}
+
+function MarkdownPre({ children }: ComponentProps<"pre">) {
+  return (
+    <pre className="overflow-x-auto rounded-xl border border-border bg-surface p-4 font-mono text-[13px] leading-6 text-fg [&>code]:rounded-none [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+      {children}
+    </pre>
+  );
+}
+
+function withCitationMarkers(
+  children: ReactNode,
+  citations: Citation[] | undefined,
+  onSelect: (id: string) => void,
+  selectedId: string | null,
+): ReactNode {
+  return Children.map(children, (child) => {
+    if (typeof child === "string") {
+      return (
+        <CitationMarkers
+          text={child}
+          citations={citations}
+          onSelect={onSelect}
+          selectedId={selectedId}
+        />
+      );
+    }
+
+    if (!isValidElement(child) || child.type === MarkdownCode || child.type === MarkdownPre) {
+      return child;
+    }
+
+    const props = child.props as { children?: ReactNode };
+    if (props.children === undefined) {
+      return child;
+    }
+
+    return cloneElement(
+      child as ReactElement<{ children?: ReactNode }>,
+      undefined,
+      withCitationMarkers(props.children, citations, onSelect, selectedId),
+    );
+  });
 }
 
 interface Token {
@@ -357,27 +511,6 @@ function CitationMarkers({
       })}
     </>
   );
-}
-
-function splitBlocks(content: string) {
-  const blocks: Array<{ key: string; text: string }> = [];
-  const pattern = /\n{2,}/g;
-  let lastIndex = 0;
-  let match = pattern.exec(content);
-
-  while (match) {
-    if (match.index > lastIndex) {
-      blocks.push({ key: `b-${lastIndex}`, text: content.slice(lastIndex, match.index) });
-    }
-    lastIndex = match.index + match[0].length;
-    match = pattern.exec(content);
-  }
-
-  if (lastIndex < content.length) {
-    blocks.push({ key: `b-${lastIndex}`, text: content.slice(lastIndex) });
-  }
-
-  return blocks;
 }
 
 function CitationsRow({

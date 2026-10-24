@@ -4,4 +4,5 @@ export * from "./domain.js";
 export * from "./health.js";
 export * from "./internal.js";
 export * from "./model-config.js";
+export * from "./search-config.js";
 export * from "./sse.js";

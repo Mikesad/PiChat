@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database, User } from "@pichat/db";
-import { authSessions, groupMembers, groups, users, verifyPassword } from "@pichat/db";
+import { authSessions, users, verifyPassword } from "@pichat/db";
 import type { SessionUser } from "@pichat/shared";
 import { and, eq, gt } from "drizzle-orm";
 import { ApiException } from "../../common/api-error";
@@ -81,20 +81,13 @@ export class AuthService {
   }
 
   private async toSessionUser(user: User): Promise<SessionUser> {
-    const membershipRows = await this.db
-      .select({ groupId: groupMembers.groupId })
-      .from(groupMembers)
-      .innerJoin(groups, eq(groupMembers.groupId, groups.id))
-      .where(and(eq(groupMembers.userId, user.id), eq(groups.tenantId, user.tenantId)));
-    const groupIds = membershipRows.map((row) => row.groupId).sort();
-
     return {
       id: user.id,
       tenantId: user.tenantId,
       email: user.email,
       displayName: user.displayName,
       role: user.role,
-      groupIds,
+      departmentId: user.departmentId,
     };
   }
 }

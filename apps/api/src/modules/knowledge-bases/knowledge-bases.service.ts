@@ -8,9 +8,9 @@ import {
   auditLogs,
   type Database,
   type Document,
+  departments,
   documentAcls,
   documents,
-  groups,
   type KnowledgeBase,
   knowledgeBaseAcls,
   knowledgeBases,
@@ -21,15 +21,17 @@ import type {
   AclSubject,
   BatchUpdateDocumentAclResponse,
   CreateKnowledgeBaseRequest,
+  DocumentAclMode,
   DocumentSummary,
   KnowledgeBaseSummary,
+  PaginationMeta,
   SessionUser,
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclResponse,
   UpdateKnowledgeBaseRequest,
 } from "@pichat/shared";
-import { formatSizeLabel } from "@pichat/shared";
-import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { defaultPageSize, formatSizeLabel } from "@pichat/shared";
+import { and, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
   conflict,
   forbidden,
@@ -38,8 +40,10 @@ import {
   serviceUnavailable,
 } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
+import { buildPaginationMeta, type PaginationInput, pageOffset } from "../../common/pagination";
 import { AccessControlService } from "../access-control/access-control.service";
 import { IngestionQueueService } from "../ingestion/ingestion-queue.service";
+import { ModelConfigsService } from "../model-configs/model-configs.service";
 import { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 
 export function canManageAcl(role: string): boolean {
@@ -51,7 +55,7 @@ function toAccessPrincipal(user: SessionUser): AccessPrincipal {
     tenantId: user.tenantId,
     userId: user.id,
     role: user.role,
-    groupIds: user.groupIds,
+    departmentId: user.departmentId,
   };
 }
 
@@ -65,6 +69,7 @@ export class KnowledgeBasesService {
     @Inject(KnowledgeBaseRemoteService) private readonly remote: KnowledgeBaseRemoteService,
     @Inject(IngestionQueueService) private readonly queue: IngestionQueueService,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(ModelConfigsService) private readonly modelConfigsService: ModelConfigsService,
   ) {}
 
   async create(
@@ -85,16 +90,36 @@ export class KnowledgeBasesService {
       throw conflict("知识库名称已存在");
     }
 
-    const embeddingModel =
-      input.embeddingModel?.trim() ||
-      (this.config.get<string>("RAGFLOW_DEFAULT_EMBEDDING_MODEL")?.trim() ?? "");
+    let embeddingModel = input.embeddingModel?.trim() ?? "";
+    if (input.embeddingConfigId) {
+      const config = await this.modelConfigsService.resolveOptionalForKind(
+        principal,
+        "embedding",
+        input.embeddingConfigId,
+      );
+      if (!config) {
+        throw notFound("Embedding 配置不存在");
+      }
+      embeddingModel = config.modelId;
+    } else if (!embeddingModel) {
+      const config = await this.modelConfigsService.resolveOptionalForKind(principal, "embedding");
+      embeddingModel =
+        config?.modelId ||
+        (this.config.get<string>("RAGFLOW_DEFAULT_EMBEDDING_MODEL")?.trim() ?? "");
+    }
     if (!embeddingModel) {
       throw serviceUnavailable(
-        "缺少 RAGFLOW_DEFAULT_EMBEDDING_MODEL，请配置默认 embedding 模型或显式指定",
+        "ȱ�� RAGFLOW_DEFAULT_EMBEDDING_MODEL��������Ĭ�� embedding ģ�ͻ���ʽָ��",
       );
     }
 
+    const ownerDepartmentId = input.ownerDepartmentId ?? null;
+    if (ownerDepartmentId) {
+      await this.assertDepartmentInTenant(principal.tenantId, ownerDepartmentId);
+    }
+
     const knowledgeBaseId = randomUUID();
+
     const dataset = await this.remote.createDataset({
       name: datasetNameFor(knowledgeBaseId),
       embeddingModel,
@@ -110,6 +135,8 @@ export class KnowledgeBasesService {
           description: input.description?.trim() || null,
           ragflowDatasetId: dataset.id,
           embeddingModel: dataset.embeddingModel ?? embeddingModel,
+          ownerId: principal.id,
+          ownerDepartmentId,
           aclVersion: 1,
         });
 
@@ -124,6 +151,8 @@ export class KnowledgeBasesService {
             actorId: principal.id,
             result: "success",
             name,
+            ownerId: principal.id,
+            ownerDepartmentId,
             ragflowDatasetId: dataset.id,
             embeddingModel: dataset.embeddingModel ?? embeddingModel,
           },
@@ -308,21 +337,61 @@ export class KnowledgeBasesService {
     });
   }
 
-  async list(principal: SessionUser): Promise<KnowledgeBaseSummary[]> {
-    const rows = await this.db
-      .select()
-      .from(knowledgeBases)
-      .where(and(eq(knowledgeBases.tenantId, principal.tenantId), isNull(knowledgeBases.deletedAt)))
-      .orderBy(desc(knowledgeBases.updatedAt));
+  async list(
+    principal: SessionUser,
+    includeLocked = false,
+    pagination: PaginationInput = { page: 1, pageSize: defaultPageSize },
+  ): Promise<{ knowledgeBases: KnowledgeBaseSummary[]; pagination: PaginationMeta }> {
+    const where = and(
+      eq(knowledgeBases.tenantId, principal.tenantId),
+      isNull(knowledgeBases.deletedAt),
+    );
+
+    if (!includeLocked && principal.role === "member") {
+      const rows = await this.db
+        .select()
+        .from(knowledgeBases)
+        .where(where)
+        .orderBy(desc(knowledgeBases.updatedAt), desc(knowledgeBases.id));
+
+      const summaries: KnowledgeBaseSummary[] = [];
+      for (const row of rows) {
+        const summary = await this.buildKnowledgeBaseSummary(row, principal, false);
+        if (summary) {
+          summaries.push(summary);
+        }
+      }
+
+      const offset = pageOffset(pagination);
+      return {
+        knowledgeBases: summaries.slice(offset, offset + pagination.pageSize),
+        pagination: buildPaginationMeta(pagination, summaries.length),
+      };
+    }
+
+    const [totalRows, rows] = await Promise.all([
+      this.db.select({ total: count() }).from(knowledgeBases).where(where),
+      this.db
+        .select()
+        .from(knowledgeBases)
+        .where(where)
+        .orderBy(desc(knowledgeBases.updatedAt), desc(knowledgeBases.id))
+        .limit(pagination.pageSize)
+        .offset(pageOffset(pagination)),
+    ]);
 
     const summaries: KnowledgeBaseSummary[] = [];
     for (const row of rows) {
-      const summary = await this.buildKnowledgeBaseSummary(row, principal);
+      const summary = await this.buildKnowledgeBaseSummary(row, principal, includeLocked);
       if (summary) {
         summaries.push(summary);
       }
     }
-    return summaries;
+
+    return {
+      knowledgeBases: summaries,
+      pagination: buildPaginationMeta(pagination, totalRows[0]?.total ?? 0),
+    };
   }
 
   async get(id: string, principal: SessionUser): Promise<KnowledgeBaseSummary> {
@@ -355,6 +424,7 @@ export class KnowledgeBasesService {
     const changes: Partial<{
       name: string;
       description: string | null;
+      ownerDepartmentId: string | null;
       retrievalTopK: number;
       retrievalSimilarityThreshold: number;
       retrievalVectorWeight: number;
@@ -386,6 +456,12 @@ export class KnowledgeBasesService {
 
     if (input.description !== undefined) {
       changes.description = input.description.trim() || null;
+    }
+    if (input.ownerDepartmentId !== undefined) {
+      if (input.ownerDepartmentId) {
+        await this.assertDepartmentInTenant(principal.tenantId, input.ownerDepartmentId);
+      }
+      changes.ownerDepartmentId = input.ownerDepartmentId || null;
     }
     if (input.retrievalTopK !== undefined) {
       changes.retrievalTopK = Math.round(input.retrievalTopK);
@@ -425,6 +501,10 @@ export class KnowledgeBasesService {
           result: "success",
           name: changes.name ?? knowledgeBase.name,
           changes: Object.keys(changes),
+          ownerDepartmentId:
+            changes.ownerDepartmentId !== undefined
+              ? changes.ownerDepartmentId
+              : knowledgeBase.ownerDepartmentId,
           retrieval: {
             topK: changes.retrievalTopK ?? knowledgeBase.retrievalTopK,
             similarityThreshold:
@@ -438,57 +518,86 @@ export class KnowledgeBasesService {
     return this.get(id, principal);
   }
 
-  async listDocuments(id: string, principal: SessionUser): Promise<DocumentSummary[]> {
+  async listDocuments(
+    id: string,
+    principal: SessionUser,
+    includeLocked = false,
+    pagination: PaginationInput = { page: 1, pageSize: defaultPageSize },
+  ): Promise<{ documents: DocumentSummary[]; pagination: PaginationMeta }> {
     const knowledgeBase = await this.findKnowledgeBase(id, principal.tenantId);
     if (!knowledgeBase) {
       throw notFound();
     }
 
+    const readableIds = await this.accessControl.listReadableDocumentIds(
+      toAccessPrincipal(principal),
+      knowledgeBase.id,
+    );
     const seesAllDocuments =
+      includeLocked ||
       principal.role === "tenant_admin" ||
       principal.role === "knowledge_admin" ||
       principal.role === "security_admin";
-    const readableIds = seesAllDocuments
-      ? null
-      : await this.accessControl.listReadableDocumentIds(
-          toAccessPrincipal(principal),
-          knowledgeBase.id,
-        );
-    if (!seesAllDocuments && (readableIds?.size ?? 0) === 0) {
+    if (!seesAllDocuments && readableIds.size === 0) {
       throw notFound();
     }
 
-    const documentRows = await this.db
-      .select()
-      .from(documents)
-      .where(
-        and(
-          eq(documents.tenantId, principal.tenantId),
-          eq(documents.knowledgeBaseId, knowledgeBase.id),
-          isNull(documents.deletedAt),
-          ne(documents.status, "deleted"),
-        ),
-      )
-      .orderBy(desc(documents.updatedAt));
+    const where = and(
+      eq(documents.tenantId, principal.tenantId),
+      eq(documents.knowledgeBaseId, knowledgeBase.id),
+      isNull(documents.deletedAt),
+      ne(documents.status, "deleted"),
+    );
 
-    const visibleDocuments = readableIds
-      ? documentRows.filter((document) => readableIds.has(document.id))
-      : documentRows;
+    let documentRows: Document[];
+    let total: number;
+    if (seesAllDocuments) {
+      const [totalRows, rows] = await Promise.all([
+        this.db.select({ total: count() }).from(documents).where(where),
+        this.db
+          .select()
+          .from(documents)
+          .where(where)
+          .orderBy(desc(documents.updatedAt), desc(documents.id))
+          .limit(pagination.pageSize)
+          .offset(pageOffset(pagination)),
+      ]);
+      total = totalRows[0]?.total ?? 0;
+      documentRows = rows;
+    } else {
+      const allRows = await this.db
+        .select()
+        .from(documents)
+        .where(where)
+        .orderBy(desc(documents.updatedAt), desc(documents.id));
+      const visibleDocuments = allRows.filter((document) => readableIds.has(document.id));
+      total = visibleDocuments.length;
+      const offset = pageOffset(pagination);
+      documentRows = visibleDocuments.slice(offset, offset + pagination.pageSize);
+    }
 
-    const exceptionRows = await this.listExceptionRows(principal.tenantId, knowledgeBase.id);
+    const documentIds = documentRows.map((document) => document.id);
+    const exceptionRows =
+      documentIds.length > 0
+        ? await this.listExceptionRows(principal.tenantId, knowledgeBase.id, documentIds)
+        : [];
     const readerCounts = await this.accessControl.effectiveReaderCountsForKnowledgeBase(
       principal.tenantId,
       knowledgeBase.id,
     );
 
-    return visibleDocuments.map((document) =>
-      this.toDocumentSummary(
-        document,
-        principal,
-        exceptionRows.filter((row) => row.documentId === document.id),
-        readerCounts.get(document.id) ?? 0,
+    return {
+      documents: documentRows.map((document) =>
+        this.toDocumentSummary(
+          document,
+          principal,
+          exceptionRows.filter((row) => row.documentId === document.id),
+          readerCounts.get(document.id) ?? 0,
+          readableIds.has(document.id),
+        ),
       ),
-    );
+      pagination: buildPaginationMeta(pagination, total),
+    };
   }
 
   async updateDocumentAcl(
@@ -618,6 +727,113 @@ export class KnowledgeBasesService {
             id: exception.id,
             permission: exception.permission,
           })),
+          aclVersion: nextVersion,
+        },
+      });
+
+      return nextVersion;
+    });
+
+    this.accessControl.invalidateKnowledgeBase(principal.tenantId, document.knowledgeBaseId);
+
+    const updatedDocument = await this.findDocument(document.id, principal.tenantId);
+    if (!updatedDocument) {
+      throw notFound();
+    }
+
+    return {
+      aclVersion,
+      document: await this.buildDocumentSummary(updatedDocument, principal),
+    };
+  }
+
+  async updateDocumentAclMode(
+    principal: SessionUser,
+    documentId: string,
+    mode: DocumentAclMode,
+  ): Promise<UpdateDocumentAclResponse> {
+    if (!canManageAcl(principal.role)) {
+      throw forbidden();
+    }
+
+    const document = await this.findDocument(documentId, principal.tenantId);
+    if (!document) {
+      throw notFound();
+    }
+
+    const aclVersion = await this.db.transaction(async (tx) => {
+      const lockedKnowledgeBase = await tx
+        .select({ id: knowledgeBases.id })
+        .from(knowledgeBases)
+        .where(
+          and(
+            eq(knowledgeBases.id, document.knowledgeBaseId),
+            eq(knowledgeBases.tenantId, principal.tenantId),
+            isNull(knowledgeBases.deletedAt),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!lockedKnowledgeBase[0]) {
+        throw notFound();
+      }
+
+      const lockedDocument = await tx
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          and(
+            eq(documents.id, document.id),
+            eq(documents.tenantId, principal.tenantId),
+            isNull(documents.deletedAt),
+            ne(documents.status, "deleted"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!lockedDocument[0]) {
+        throw notFound();
+      }
+
+      await tx
+        .update(documents)
+        .set({ aclMode: mode })
+        .where(and(eq(documents.id, document.id), eq(documents.tenantId, principal.tenantId)));
+
+      await tx
+        .update(knowledgeBases)
+        .set({ aclVersion: sql`${knowledgeBases.aclVersion} + 1` })
+        .where(
+          and(
+            eq(knowledgeBases.id, document.knowledgeBaseId),
+            eq(knowledgeBases.tenantId, principal.tenantId),
+          ),
+        );
+
+      const versionRows = await tx
+        .select({ aclVersion: knowledgeBases.aclVersion })
+        .from(knowledgeBases)
+        .where(
+          and(
+            eq(knowledgeBases.id, document.knowledgeBaseId),
+            eq(knowledgeBases.tenantId, principal.tenantId),
+          ),
+        )
+        .limit(1);
+      const nextVersion = versionRows[0]?.aclVersion ?? 0;
+
+      await tx.insert(auditLogs).values({
+        id: randomUUID(),
+        tenantId: principal.tenantId,
+        actorId: principal.id,
+        action: "document.acl_mode.update",
+        resourceType: "document",
+        resourceId: document.id,
+        metadata: {
+          actorId: principal.id,
+          result: "success",
+          before: { aclMode: document.aclMode },
+          after: { aclMode: mode },
           aclVersion: nextVersion,
         },
       });
@@ -805,6 +1021,10 @@ export class KnowledgeBasesService {
       principal.tenantId,
       knowledgeBase.id,
     );
+    const readableIds = await this.accessControl.listReadableDocumentIds(
+      toAccessPrincipal(principal),
+      knowledgeBase.id,
+    );
     const rowsById = new Map(result.documents.map((row) => [row.id, row]));
 
     const updatedDocuments = uniqueDocumentIds.flatMap((documentId) => {
@@ -816,6 +1036,7 @@ export class KnowledgeBasesService {
               principal,
               afterRows.filter((exception) => exception.documentId === documentId),
               readerCounts.get(documentId) ?? 0,
+              readableIds.has(documentId),
             ),
           ]
         : [];
@@ -828,6 +1049,7 @@ export class KnowledgeBasesService {
     principal: SessionUser,
     knowledgeBaseId: string,
     defaultSubjects: AclSubject[],
+    deniedSubjects?: AclSubject[],
   ): Promise<UpdateKnowledgeBaseAclResponse> {
     if (!canManageAcl(principal.role)) {
       throw forbidden();
@@ -838,6 +1060,25 @@ export class KnowledgeBasesService {
       throw notFound();
     }
 
+    const existingDenied =
+      deniedSubjects === undefined
+        ? await this.db
+            .select({
+              subjectType: knowledgeBaseAcls.subjectType,
+              subjectId: knowledgeBaseAcls.subjectId,
+            })
+            .from(knowledgeBaseAcls)
+            .where(
+              and(
+                eq(knowledgeBaseAcls.tenantId, principal.tenantId),
+                eq(knowledgeBaseAcls.knowledgeBaseId, knowledgeBase.id),
+                eq(knowledgeBaseAcls.permission, "deny"),
+              ),
+            )
+        : [];
+    const deniedInput =
+      deniedSubjects ?? existingDenied.map((row) => ({ type: row.subjectType, id: row.subjectId }));
+
     const seen = new Set<string>();
     const subjects: AclSubject[] = [];
     for (const subject of defaultSubjects) {
@@ -847,7 +1088,21 @@ export class KnowledgeBasesService {
         subjects.push(subject);
       }
     }
-    await this.assertSubjectsInTenant(principal.tenantId, subjects);
+
+    const allowedKeys = new Set(subjects.map((subject) => `${subject.type}:${subject.id}`));
+    const deniedSeen = new Set<string>();
+    const denied: AclSubject[] = [];
+    for (const subject of deniedInput) {
+      const key = `${subject.type}:${subject.id}`;
+      if (allowedKeys.has(key)) {
+        throw invalidRequest("同一主体不能同时出现在允许和禁止名单中", { subject: key });
+      }
+      if (!deniedSeen.has(key)) {
+        deniedSeen.add(key);
+        denied.push(subject);
+      }
+    }
+    await this.assertSubjectsInTenant(principal.tenantId, [...subjects, ...denied]);
 
     const beforeRows = await this.db
       .select({
@@ -889,17 +1144,26 @@ export class KnowledgeBasesService {
           ),
         );
 
-      if (subjects.length > 0) {
-        await tx.insert(knowledgeBaseAcls).values(
-          subjects.map((subject) => ({
-            id: randomUUID(),
-            tenantId: principal.tenantId,
-            knowledgeBaseId: knowledgeBase.id,
-            subjectType: subject.type,
-            subjectId: subject.id,
-            permission: "read" as const,
-          })),
-        );
+      const aclRows = [
+        ...subjects.map((subject) => ({
+          id: randomUUID(),
+          tenantId: principal.tenantId,
+          knowledgeBaseId: knowledgeBase.id,
+          subjectType: subject.type,
+          subjectId: subject.id,
+          permission: "read" as const,
+        })),
+        ...denied.map((subject) => ({
+          id: randomUUID(),
+          tenantId: principal.tenantId,
+          knowledgeBaseId: knowledgeBase.id,
+          subjectType: subject.type,
+          subjectId: subject.id,
+          permission: "deny" as const,
+        })),
+      ];
+      if (aclRows.length > 0) {
+        await tx.insert(knowledgeBaseAcls).values(aclRows);
       }
 
       await tx
@@ -939,11 +1203,18 @@ export class KnowledgeBasesService {
             id: row.subjectId,
             permission: row.permission,
           })),
-          after: subjects.map((subject) => ({
-            type: subject.type,
-            id: subject.id,
-            permission: "read",
-          })),
+          after: [
+            ...subjects.map((subject) => ({
+              type: subject.type,
+              id: subject.id,
+              permission: "read",
+            })),
+            ...denied.map((subject) => ({
+              type: subject.type,
+              id: subject.id,
+              permission: "deny",
+            })),
+          ],
           aclVersion: nextVersion,
         },
       });
@@ -970,12 +1241,13 @@ export class KnowledgeBasesService {
   private async buildKnowledgeBaseSummary(
     knowledgeBase: KnowledgeBase,
     principal: SessionUser,
+    includeLocked = false,
   ): Promise<KnowledgeBaseSummary | null> {
     const readableIds = await this.accessControl.listReadableDocumentIds(
       toAccessPrincipal(principal),
       knowledgeBase.id,
     );
-    if (principal.role === "member" && readableIds.size === 0) {
+    if (!includeLocked && principal.role === "member" && readableIds.size === 0) {
       return null;
     }
 
@@ -1008,18 +1280,24 @@ export class KnowledgeBasesService {
     const defaultSubjects = defaultRows
       .filter((row) => row.permission === "read")
       .map((row) => ({ type: row.subjectType, id: row.subjectId }));
+    const deniedSubjects = defaultRows
+      .filter((row) => row.permission === "deny")
+      .map((row) => ({ type: row.subjectType, id: row.subjectId }));
 
     return {
       id: knowledgeBase.id,
       name: knowledgeBase.name,
       description: knowledgeBase.description,
       embeddingModel: knowledgeBase.embeddingModel,
+      ownerId: knowledgeBase.ownerId,
+      ownerDepartmentId: knowledgeBase.ownerDepartmentId,
       ragflowDatasetId: knowledgeBase.ragflowDatasetId,
       retrievalTopK: knowledgeBase.retrievalTopK,
       retrievalSimilarityThreshold: knowledgeBase.retrievalSimilarityThreshold,
       retrievalVectorWeight: knowledgeBase.retrievalVectorWeight,
       aclVersion: knowledgeBase.aclVersion,
       defaultSubjects,
+      deniedSubjects,
       documentCount: documentRows.length,
       readableDocumentCount:
         principal.role === "tenant_admin" ? documentRows.length : readableIds.size,
@@ -1040,8 +1318,15 @@ export class KnowledgeBasesService {
       document.id,
       principal.tenantId,
     );
+    const decision = await this.accessControl.canRead(document.id, toAccessPrincipal(principal));
 
-    return this.toDocumentSummary(document, principal, exceptions, effectiveReaderCount);
+    return this.toDocumentSummary(
+      document,
+      principal,
+      exceptions,
+      effectiveReaderCount,
+      decision?.allowed ?? false,
+    );
   }
 
   private toDocumentSummary(
@@ -1053,7 +1338,10 @@ export class KnowledgeBasesService {
       permission: "read" | "deny";
     }>,
     effectiveReaderCount: number,
+    canRead: boolean,
   ): DocumentSummary {
+    const canManage = canManageAcl(principal.role);
+
     return {
       id: document.id,
       knowledgeBaseId: document.knowledgeBaseId,
@@ -1061,20 +1349,25 @@ export class KnowledgeBasesService {
       status: document.status,
       sourceKey: document.sourceKey,
       ragflowDocumentId: document.ragflowDocumentId,
+      aclMode: document.aclMode,
       sizeLabel: formatSizeLabel(document.sizeBytes),
       mimeType: document.mimeType,
       errorMessage: document.errorMessage,
-      exceptions: exceptionRows
-        .map((row) => ({
-          type: row.subjectType,
-          id: row.subjectId,
-          permission: row.permission,
-        }))
-        .sort((left, right) =>
-          `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`),
-        ),
+      exceptions:
+        canManage || canRead
+          ? exceptionRows
+              .map((row) => ({
+                type: row.subjectType,
+                id: row.subjectId,
+                permission: row.permission,
+              }))
+              .sort((left, right) =>
+                `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`),
+              )
+          : [],
       effectiveReaderCount,
-      canManageAcl: canManageAcl(principal.role),
+      canRead,
+      canManageAcl: canManage,
       createdAt: document.createdAt.toISOString(),
       updatedAt: document.updatedAt.toISOString(),
     };
@@ -1207,12 +1500,23 @@ export class KnowledgeBasesService {
     }
   }
 
+  private async assertDepartmentInTenant(tenantId: string, departmentId: string): Promise<void> {
+    const rows = await this.db
+      .select({ id: departments.id })
+      .from(departments)
+      .where(and(eq(departments.tenantId, tenantId), eq(departments.id, departmentId)))
+      .limit(1);
+    if (!rows[0]) {
+      throw invalidRequest("部门不属于当前租户");
+    }
+  }
+
   private async assertSubjectsInTenant(
     tenantId: string,
     subjects: Array<{ type: "user" | "group"; id: string }>,
   ): Promise<void> {
     const userIds = [...new Set(subjects.filter((s) => s.type === "user").map((s) => s.id))];
-    const groupIds = [...new Set(subjects.filter((s) => s.type === "group").map((s) => s.id))];
+    const departmentIds = [...new Set(subjects.filter((s) => s.type === "group").map((s) => s.id))];
 
     if (userIds.length > 0) {
       const rows = await this.db
@@ -1224,12 +1528,12 @@ export class KnowledgeBasesService {
       }
     }
 
-    if (groupIds.length > 0) {
+    if (departmentIds.length > 0) {
       const rows = await this.db
-        .select({ id: groups.id })
-        .from(groups)
-        .where(and(eq(groups.tenantId, tenantId), inArray(groups.id, groupIds)));
-      if (rows.length !== groupIds.length) {
+        .select({ id: departments.id })
+        .from(departments)
+        .where(and(eq(departments.tenantId, tenantId), inArray(departments.id, departmentIds)));
+      if (rows.length !== departmentIds.length) {
         throw invalidRequest("主体不属于当前租户");
       }
     }

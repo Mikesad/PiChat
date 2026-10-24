@@ -27,6 +27,7 @@
   --warning: #b45309;
   --warning-soft: #fffbeb;
   --ring: #2563eb;
+  --logo-color: #2563eb;
   --elev-card: 0 1px 2px rgba(15, 23, 42, 0.04);
   --elev-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.18);
   --font-sans-stack:
@@ -59,8 +60,107 @@
   --warning: #fbbf24;
   --warning-soft: #2a1e08;
   --ring: #60a5fa;
+  --logo-color: #e8edf5;
   --elev-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --elev-pop: 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+}
+
+/*
+ * 第三主题「Pi 羊皮纸」：逆向自 pi.dev 的亮色模式。
+ * 暖米纸画布（moonstone/parchment）+ 工程图纸网格（4px 小格 / 20px 大格 /
+ * 交叉点「+」标记）+ 底部晕影；墨色 evening-blue、主色 tidal-blue、陶土点缀。
+ * 本主题为亮色，不与 .dark 同挂。--bg 故意半透明：应用根容器用 bg-bg 涂满全屏，
+ * 半透明的 --bg 能让 body::before 上的网格透过根容器隐约可见。
+ */
+.pi {
+  color-scheme: light;
+
+  --bg: rgba(235, 231, 228, 0.4);
+  --surface: #f4f2f0;
+  --surface-2: #eef1f3;
+  --surface-3: #e2e6ea;
+  --fg: #252f3d;
+  --fg-muted: #5c5752;
+  --fg-subtle: #8b847d;
+  --border: rgba(139, 132, 125, 0.35);
+  --border-strong: rgba(92, 87, 82, 0.4);
+  --accent: #4b607c;
+  --accent-hover: #3e526b;
+  --accent-soft: rgba(75, 96, 124, 0.09);
+  --accent-soft-border: rgba(75, 96, 124, 0.25);
+  --accent-fg: #f4f2f0;
+  --accent-text: #4b607c;
+  --danger: #844f3b;
+  --danger-soft: rgba(132, 79, 59, 0.1);
+  --success: #5a7247;
+  --success-soft: rgba(163, 164, 115, 0.18);
+  --warning: #a8742c;
+  --warning-soft: rgba(225, 176, 110, 0.22);
+  --ring: rgba(75, 96, 124, 0.5);
+  --logo-color: #252f3d;
+  --elev-card: 0 1px 2px rgba(60, 50, 40, 0.06);
+  --elev-pop: 0 16px 40px -16px rgba(120, 98, 81, 0.28);
+
+  --page-grid-cell: 20px;
+  --page-grid-minor: #252f3d12;
+  --page-grid-major: #252f3d1c;
+  --page-grid-cross: #252f3d2e;
+  --paper-bg: #ebe7e4;
+}
+
+.pi body::before,
+.pi body::after {
+  content: "";
+  position: fixed;
+  inset: -8rem;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.pi body::before {
+  --grid-gap: calc(var(--page-grid-cell) / 5);
+
+  background-color: var(--paper-bg);
+  background-image:
+    linear-gradient(var(--page-grid-minor) 0 1px, transparent 1px var(--grid-gap)),
+    linear-gradient(to right, var(--page-grid-minor) 0 1px, transparent 1px var(--grid-gap)),
+    linear-gradient(var(--page-grid-major) 0 1px, transparent 1px calc(var(--grid-gap) * 5)),
+    linear-gradient(
+      to right,
+      var(--page-grid-major) 0 1px,
+      transparent 1px calc(var(--grid-gap) * 5)
+    ),
+    radial-gradient(
+      circle at center,
+      transparent calc(var(--grid-gap) / 2),
+      var(--paper-bg) calc(var(--grid-gap) / 2) 100%
+    ),
+    linear-gradient(var(--page-grid-cross) 0 1px, transparent 1px calc(var(--grid-gap) * 5)),
+    linear-gradient(
+      to right,
+      var(--page-grid-cross) 0 1px,
+      transparent 1px calc(var(--grid-gap) * 5)
+    );
+  background-size:
+    var(--grid-gap) var(--grid-gap),
+    var(--grid-gap) var(--grid-gap),
+    calc(var(--grid-gap) * 5) calc(var(--grid-gap) * 5),
+    calc(var(--grid-gap) * 5) calc(var(--grid-gap) * 5),
+    calc(var(--grid-gap) * 5) calc(var(--grid-gap) * 5),
+    calc(var(--grid-gap) * 5) calc(var(--grid-gap) * 5),
+    calc(var(--grid-gap) * 5) calc(var(--grid-gap) * 5);
+  background-position:
+    0 0,
+    0 0,
+    0 0,
+    0 0,
+    calc(var(--grid-gap) * -2.5) calc(var(--grid-gap) * -2.5),
+    0 0,
+    0 0;
+}
+
+.pi body::after {
+  background: linear-gradient(to bottom, rgba(218, 203, 194, 0.15), var(--paper-bg) 92%);
 }
 
 @theme inline {
@@ -189,7 +289,9 @@
   animation: drawer-left-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.streaming-caret {
+.markdown-streaming > :last-child:not(ul):not(ol)::after,
+.markdown-streaming > :last-child > li:last-child::after {
+  content: "";
   display: inline-block;
   width: 2px;
   height: 1.05em;
@@ -197,6 +299,11 @@
   vertical-align: -0.15em;
   background-color: var(--accent);
   animation: caret-blink 1s steps(2, start) infinite;
+}
+
+.message-markdown img {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -209,7 +316,8 @@
     scroll-behavior: auto;
   }
 
-  .streaming-caret {
+  .markdown-streaming > :last-child:not(ul):not(ol)::after,
+  .markdown-streaming > :last-child > li:last-child::after {
     animation: none;
   }
 }

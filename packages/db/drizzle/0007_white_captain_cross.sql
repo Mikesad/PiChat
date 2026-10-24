@@ -1,0 +1,3 @@
+ALTER TABLE `knowledge_bases` ADD `owner_department_id` varchar(36);--> statement-breakpoint
+ALTER TABLE `knowledge_bases` ADD CONSTRAINT `knowledge_bases_owner_department_id_groups_id_fk` FOREIGN KEY (`owner_department_id`) REFERENCES `groups`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX `knowledge_bases_owner_department_idx` ON `knowledge_bases` (`owner_department_id`);

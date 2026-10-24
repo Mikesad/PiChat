@@ -135,6 +135,8 @@ export interface SendChatMessageRequest {
   modelConfigId?: string;
   thinkingLevel?: ThinkingLevel;
   retry?: boolean;
+  webSearch?: boolean;
+  knowledgeBaseIds?: string[];
 }
 
 export const chatThinkingLevels = [

@@ -43,6 +43,41 @@
       "when": 1792666313264,
       "tag": "0005_absurd_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1792816853680,
+      "tag": "0006_yellow_mephistopheles",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1792836173586,
+      "tag": "0007_white_captain_cross",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1792848117300,
+      "tag": "0008_department_owner_acl_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1792848179338,
+      "tag": "0009_drop_group_members",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1792854350534,
+      "tag": "0010_rename_groups_to_departments",
+      "breakpoints": true
     }
   ]
 }

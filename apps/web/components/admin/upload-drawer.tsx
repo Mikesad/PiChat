@@ -7,6 +7,7 @@ import { apiErrorMessage, uploadDocument } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { Icon, Spinner } from "../icons";
 import { useAdminData } from "./admin-data";
+import { useDirectory } from "./directory";
 import { Drawer } from "./drawer";
 import { useToast } from "./toast";
 import { Button, InfoBanner, SubjectChip } from "./ui";
@@ -37,6 +38,8 @@ export function UploadDrawer({
 }) {
   const { showToast } = useToast();
   const { reload } = useAdminData();
+  const { subjectName } = useDirectory();
+  const inheritedAccessLabel = defaultAccessLabel(knowledgeBase, subjectName);
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<SelectedFile[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -174,13 +177,6 @@ export function UploadDrawer({
         </div>
       }
     >
-      <div className="mb-4">
-        <InfoBanner tone="accent" icon="info" title="上传后由后台解析">
-          文件会保存到服务端，并通过任务队列上传到
-          RAGFlow。解析状态会在文档列表中自动刷新，完成后才可检索。
-        </InfoBanner>
-      </div>
-
       <input
         ref={inputRef}
         type="file"
@@ -286,14 +282,21 @@ export function UploadDrawer({
       <div className="mt-4">
         <p className="text-xs font-medium text-fg">新文档的访问范围</p>
         <p className="mt-1 text-[11px] leading-5 text-subtle">
-          将继承知识库默认范围：{defaultAccessLabel(knowledgeBase)}。文档例外可在上传后调整。
+          将继承知识库默认范围：{inheritedAccessLabel}。文档例外可在上传后调整。
         </p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {knowledgeBase.defaultSubjects.map((subject) => (
             <SubjectChip key={`${subject.type}-${subject.id}`} subject={subject} />
           ))}
         </div>
-        {knowledgeBase.defaultSubjects.length === 0 ? (
+        {knowledgeBase.deniedSubjects.length > 0 ? (
+          <div className="mt-2">
+            <InfoBanner tone="danger" icon="lock" title="知识库级禁止">
+              被禁止的用户和部门即使有文档读取例外，也不能读取新文档。
+            </InfoBanner>
+          </div>
+        ) : null}
+        {knowledgeBase.defaultSubjects.length === 0 && knowledgeBase.deniedSubjects.length === 0 ? (
           <div className="mt-2">
             <InfoBanner tone="warning" icon="lock" title="尚未设置默认范围">
               上传后只有租户管理员可读，普通成员需要通过文档例外授权。

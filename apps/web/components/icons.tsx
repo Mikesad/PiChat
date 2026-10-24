@@ -1,7 +1,8 @@
 import type { ReactNode, SVGProps } from "react";
 import { cn } from "@/lib/utils";
+import { PiChatLogoMark } from "./pichat-logo-mark";
 
-const paths: Record<string, ReactNode> = {
+const paths = {
   plus: (
     <>
       <path d="M12 5v14" />
@@ -81,6 +82,20 @@ const paths: Record<string, ReactNode> = {
   wrench: (
     <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />
   ),
+  plug: (
+    <>
+      <path d="M12 22v-5" />
+      <path d="M9 8V2" />
+      <path d="M15 8V2" />
+      <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+    </>
+  ),
+  code: (
+    <>
+      <path d="m16 18 6-6-6-6" />
+      <path d="m8 6-6 6 6 6" />
+    </>
+  ),
   "file-text": (
     <>
       <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
@@ -95,6 +110,14 @@ const paths: Record<string, ReactNode> = {
       <ellipse cx="12" cy="5" rx="9" ry="3" />
       <path d="M3 5v14a9 3 0 0 0 18 0V5" />
       <path d="M3 12a9 3 0 0 0 18 0" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18" />
+      <path d="M12 3a14 14 0 0 0 0 18" />
     </>
   ),
   "book-open": (
@@ -116,6 +139,9 @@ const paths: Record<string, ReactNode> = {
       <path d="M9 12h6" />
       <path d="M9 16h6" />
     </>
+  ),
+  paperclip: (
+    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
   ),
   sun: (
     <>
@@ -286,7 +312,29 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   "chevron-up": <path d="m18 15-6-6-6 6" />,
-};
+  grid: (
+    <>
+      <path d="M3 9h18" />
+      <path d="M3 15h18" />
+      <path d="M9 3v18" />
+      <path d="M15 3v18" />
+    </>
+  ),
+  image: (
+    <>
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="m21 15-5-5L5 21" />
+    </>
+  ),
+  mic: (
+    <>
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <path d="M12 19v3" />
+    </>
+  ),
+} satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;
 
@@ -317,29 +365,15 @@ export function Icon({ name, size = 18, strokeWidth = 1.75, className, ...props 
 }
 
 export function LogoMark({ className }: { className?: string }) {
+  // Calligraphic "P" from PiChatLogoMark; color follows --logo-color,
+  // which is set per theme in globals.css.
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-accent text-accent-fg",
-        className,
-      )}
+      className={cn("inline-flex size-8 shrink-0 items-center justify-center", className)}
+      style={{ color: "var(--logo-color, var(--accent))" }}
     >
-      <svg
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <path d="M5 8h14" />
-        <path d="M8.5 8v9" />
-        <path d="M15.5 8v9" />
-      </svg>
+      <PiChatLogoMark />
     </span>
   );
 }

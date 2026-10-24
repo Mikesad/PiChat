@@ -9,7 +9,7 @@ Knowledge base management and document-level permissions. Chat keeps its own lay
 ## Layout
 
 - Sidebar: 280px, shared with chat. Top-level switch: `对话 / 管理`.
-- Manage nav: 知识库, 文档权限, 成员与组, 审计日志.
+- Manage nav: 知识库, 文档权限, 部门成员, 审计日志.
 - Topbar: 56px, breadcrumb, theme toggle, current user.
 - Content: max-width 1200px, padding 16 / 24 / 32. Page header above a stats strip and table.
 - Mobile: sidebar drawer; tables switch to cards below 1280px because the 280px sidebar reduces the usable width. No horizontal page scroll.

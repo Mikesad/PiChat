@@ -3,13 +3,14 @@ export type SeedUserStatus = "active" | "disabled";
 export type SeedDocumentStatus = "pending" | "parsing" | "ready" | "failed" | "deleted";
 export type SeedSubjectType = "user" | "group";
 export type SeedPermission = "read" | "deny";
+export type SeedDocumentAclMode = "inherit" | "restricted";
 
 export interface SeedUser {
   id: string;
   name: string;
   email: string;
   role: SeedRole;
-  groupIds: string[];
+  departmentId: string | null;
   status: SeedUserStatus;
 }
 
@@ -35,6 +36,7 @@ export interface SeedDocument {
   status: SeedDocumentStatus;
   sourceKey: string;
   ragflowDocumentId: string | null;
+  aclMode?: SeedDocumentAclMode;
   exceptions: SeedAclException[];
   createdAt: string;
   updatedAt: string;
@@ -45,6 +47,8 @@ export interface SeedKnowledgeBase {
   name: string;
   description: string;
   embeddingModel: string;
+  ownerId: string | null;
+  ownerDepartmentId: string | null;
   ragflowDatasetId: string;
   defaultSubjects: SeedAclSubject[];
   documents: SeedDocument[];
@@ -66,7 +70,7 @@ export const seedUsers: SeedUser[] = [
     name: "张明",
     email: "zhang.ming@example.com",
     role: "tenant_admin",
-    groupIds: ["g-all", "g-platform"],
+    departmentId: "g-platform",
     status: "active",
   },
   {
@@ -74,7 +78,7 @@ export const seedUsers: SeedUser[] = [
     name: "李雷",
     email: "li.lei@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product", "g-finance"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -82,7 +86,7 @@ export const seedUsers: SeedUser[] = [
     name: "王芳",
     email: "wang.fang@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -90,7 +94,7 @@ export const seedUsers: SeedUser[] = [
     name: "陈晨",
     email: "chen.chen@example.com",
     role: "knowledge_admin",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -98,7 +102,7 @@ export const seedUsers: SeedUser[] = [
     name: "刘洋",
     email: "liu.yang@example.com",
     role: "security_admin",
-    groupIds: ["g-all", "g-platform"],
+    departmentId: "g-platform",
     status: "active",
   },
   {
@@ -106,7 +110,7 @@ export const seedUsers: SeedUser[] = [
     name: "赵敏",
     email: "zhao.min@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -114,7 +118,7 @@ export const seedUsers: SeedUser[] = [
     name: "孙悦",
     email: "sun.yue@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -122,7 +126,7 @@ export const seedUsers: SeedUser[] = [
     name: "周杰",
     email: "zhou.jie@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -130,7 +134,7 @@ export const seedUsers: SeedUser[] = [
     name: "吴静",
     email: "wu.jing@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -138,7 +142,7 @@ export const seedUsers: SeedUser[] = [
     name: "郑凯",
     email: "zheng.kai@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -146,7 +150,7 @@ export const seedUsers: SeedUser[] = [
     name: "冯雪",
     email: "feng.xue@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -154,7 +158,7 @@ export const seedUsers: SeedUser[] = [
     name: "何伟",
     email: "he.wei@example.com",
     role: "member",
-    groupIds: ["g-all"],
+    departmentId: "g-platform",
     status: "active",
   },
   {
@@ -162,7 +166,7 @@ export const seedUsers: SeedUser[] = [
     name: "许琳",
     email: "xu.lin@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -170,18 +174,18 @@ export const seedUsers: SeedUser[] = [
     name: "顾强",
     email: "gu.qiang@example.com",
     role: "member",
-    groupIds: ["g-all"],
+    departmentId: "g-platform",
     status: "disabled",
   },
 ];
 
 export const seedGroups: SeedGroup[] = [
   { id: "g-all", name: "全员", externalId: "idp-all-staff" },
-  { id: "g-platform", name: "平台组", externalId: "idp-platform" },
-  { id: "g-product", name: "产品组", externalId: "idp-product" },
-  { id: "g-support", name: "售后组", externalId: "idp-support" },
-  { id: "g-finance", name: "财务组", externalId: "idp-finance" },
-  { id: "g-outsource", name: "外包组", externalId: "idp-outsource" },
+  { id: "g-platform", name: "平台部", externalId: "idp-platform" },
+  { id: "g-product", name: "产品部", externalId: "idp-product" },
+  { id: "g-support", name: "售后部", externalId: "idp-support" },
+  { id: "g-finance", name: "财务部", externalId: "idp-finance" },
+  { id: "g-outsource", name: "外包部", externalId: "idp-outsource" },
 ];
 
 export const seedKnowledgeBases: SeedKnowledgeBase[] = [
@@ -190,10 +194,17 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
     name: "内部制度",
     description: "公司级制度、流程与合规文件，默认全员可读。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerId: "u-zhang",
+    ownerDepartmentId: "g-platform",
     ragflowDatasetId: "ragflow_policy_2026",
     createdAt: "2026-08-12T01:00:00.000Z",
     updatedAt: "2026-10-20T02:24:00.000Z",
-    defaultSubjects: [{ type: "group", id: "g-all" }],
+    defaultSubjects: [
+      { type: "group", id: "g-platform" },
+      { type: "group", id: "g-product" },
+      { type: "group", id: "g-support" },
+      { type: "group", id: "g-finance" },
+    ],
     documents: [
       {
         id: "doc-travel",
@@ -235,11 +246,12 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
         status: "ready",
         sourceKey: "s3://policy/2026/security.pdf",
         ragflowDocumentId: "rf_doc_security",
+        aclMode: "restricted",
         createdAt: "2026-08-12T01:00:00.000Z",
         updatedAt: "2026-10-19T08:20:00.000Z",
         exceptions: [
-          { type: "user", id: "u-li", permission: "deny" },
-          { type: "user", id: "u-wang", permission: "deny" },
+          { type: "group", id: "g-platform", permission: "read" },
+          { type: "group", id: "g-product", permission: "read" },
         ],
       },
       {
@@ -258,8 +270,10 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
   {
     id: "kb-product",
     name: "产品手册",
-    description: "对外产品资料与内部版本说明，默认产品组可读。",
+    description: "对外产品资料与内部版本说明，默认产品部可读。",
     embeddingModel: "text-embedding-3-large · 3072 维",
+    ownerId: "u-chen",
+    ownerDepartmentId: "g-product",
     ragflowDatasetId: "ragflow_product_v3",
     createdAt: "2026-07-03T06:30:00.000Z",
     updatedAt: "2026-10-20T01:05:00.000Z",
@@ -305,9 +319,10 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
         status: "ready",
         sourceKey: "s3://product/pricing.pdf",
         ragflowDocumentId: "rf_doc_pricing",
+        aclMode: "restricted",
         createdAt: "2026-07-03T06:30:00.000Z",
         updatedAt: "2026-10-15T05:10:00.000Z",
-        exceptions: [{ type: "group", id: "g-finance", permission: "read" }],
+        exceptions: [{ type: "group", id: "g-product", permission: "read" }],
       },
       {
         id: "doc-competitor",
@@ -327,10 +342,15 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
     name: "售后知识库",
     description: "客服与售后团队的处理规范、话术与常见问题。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerId: "u-zhang",
+    ownerDepartmentId: "g-support",
     ragflowDatasetId: "ragflow_support_2026",
     createdAt: "2026-06-18T02:00:00.000Z",
     updatedAt: "2026-10-19T09:42:00.000Z",
-    defaultSubjects: [{ type: "group", id: "g-support" }],
+    defaultSubjects: [
+      { type: "group", id: "g-support" },
+      { type: "group", id: "g-product" },
+    ],
     documents: [
       {
         id: "doc-complaint",
@@ -339,9 +359,10 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
         status: "ready",
         sourceKey: "s3://support/complaint-sop.docx",
         ragflowDocumentId: "rf_doc_complaint",
+        aclMode: "restricted",
         createdAt: "2026-06-18T02:00:00.000Z",
         updatedAt: "2026-10-19T09:42:00.000Z",
-        exceptions: [{ type: "group", id: "g-product", permission: "read" }],
+        exceptions: [{ type: "group", id: "g-support", permission: "read" }],
       },
       {
         id: "doc-return",
@@ -394,10 +415,12 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
     name: "董事会材料",
     description: "仅在明确授权后可读，默认不对普通成员开放。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerId: "u-zhang",
+    ownerDepartmentId: "g-finance",
     ragflowDatasetId: "ragflow_board_2026",
     createdAt: "2026-09-01T01:00:00.000Z",
     updatedAt: "2026-09-30T10:00:00.000Z",
-    defaultSubjects: [],
+    defaultSubjects: [{ type: "group", id: "g-finance" }],
     documents: [
       {
         id: "doc-board-minutes",

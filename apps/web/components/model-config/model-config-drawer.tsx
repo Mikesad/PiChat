@@ -3,11 +3,16 @@
 import type { ModelConfigSummary, ModelProviderId } from "@pichat/shared";
 import { type FormEvent, useRef, useState } from "react";
 import { apiErrorMessage } from "@/lib/api-client";
-import { defaultDisplayName, modelProviders, providerOptions } from "@/lib/model-config";
+import {
+  defaultDisplayName,
+  modelProviders,
+  modelsForKind,
+  providerOptionsForKind,
+} from "@/lib/model-config";
 import { cn } from "@/lib/utils";
 import { Drawer } from "../admin/drawer";
 import { useToast } from "../admin/toast";
-import { Badge, Button, FormField, InfoBanner, inputClass } from "../admin/ui";
+import { Badge, Button, FormField, InfoBanner, inputClass, selectClass } from "../admin/ui";
 import { Icon } from "../icons";
 import { useModelConfig } from "./model-config-provider";
 
@@ -19,7 +24,7 @@ interface FormErrors {
 
 export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
   const {
-    configs,
+    chatConfigs,
     activeConfig,
     error: loadError,
     saveConfig,
@@ -37,7 +42,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
     activeConfig?.modelId ?? modelProviders[initialProvider].models[0]?.id ?? "",
   );
   const [displayName, setDisplayName] = useState("");
-  const [makeDefault, setMakeDefault] = useState(configs.length === 0);
+  const [makeDefault, setMakeDefault] = useState(chatConfigs.length === 0);
   const [showKey, setShowKey] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [error, setError] = useState<string | null>(null);
@@ -48,11 +53,13 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
   const formRef = useRef<HTMLDivElement>(null);
 
   const editingConfig = editingId
-    ? (configs.find((config) => config.id === editingId) ?? null)
+    ? (chatConfigs.find((config) => config.id === editingId) ?? null)
     : null;
   const isEditing = editingConfig !== null;
   const isCurrentDefault = editingConfig?.isDefault ?? false;
   const providerDefinition = modelProviders[provider];
+  const chatProviders = providerOptionsForKind("chat");
+  const chatModels = modelsForKind(provider, "chat");
 
   function resetForm() {
     const nextProvider = activeConfig?.provider ?? "opencode-go";
@@ -62,7 +69,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
     setBaseUrl(modelProviders[nextProvider].defaultBaseUrl);
     setModelId(modelProviders[nextProvider].models[0]?.id ?? "");
     setDisplayName("");
-    setMakeDefault(configs.length === 0);
+    setMakeDefault(chatConfigs.length === 0);
     setErrors({});
     setError(null);
     setShowKey(false);
@@ -131,6 +138,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
     try {
       const saved = await saveConfig({
         id: editingId ?? undefined,
+        kind: "chat",
         provider,
         apiKey: apiKey.trim() || undefined,
         baseUrl,
@@ -176,7 +184,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       width="lg"
       title="模型配置"
-      description="当前支持 OpenCode Go 套餐与 DeepSeek 官方 API。配置按账号保存在服务端，API Key 只返回脱敏信息。"
+      description="这里配置对话模型；Embedding、ReRank 与搜索引擎可在管理端「模型配置」「搜索引擎」中维护。配置按账号保存在服务端，API Key 只返回脱敏信息。"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-subtle">API Key 由服务端加密保存，浏览器不持久化明文</p>
@@ -199,14 +207,14 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
         </div>
       ) : null}
 
-      {configs.length > 0 ? (
+      {chatConfigs.length > 0 ? (
         <section>
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-xs font-medium text-fg">已配置模型</h3>
-            <Badge tone="outline">{configs.length}</Badge>
+            <Badge tone="outline">{chatConfigs.length}</Badge>
           </div>
           <ul className="mt-2 space-y-2">
-            {configs.map((config) => {
+            {chatConfigs.map((config) => {
               const isDefault = config.isDefault;
               return (
                 <li
@@ -296,39 +304,32 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
         ) : null}
 
         <form id="model-config-form" onSubmit={handleSubmit} className="mt-3 space-y-4" noValidate>
-          <fieldset>
-            <legend className="text-xs font-medium text-fg">服务商</legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {providerOptions.map((option) => (
-                <label key={option.id} className="relative block cursor-pointer">
-                  <input
-                    type="radio"
-                    name="model-provider"
-                    value={option.id}
-                    checked={provider === option.id}
-                    onChange={() => selectProvider(option.id)}
-                    className="peer sr-only"
-                  />
-                  <span className="flex h-full flex-col rounded-xl border border-border bg-surface p-3 transition-colors duration-150 peer-checked:border-accent peer-checked:bg-accent-soft peer-focus-visible:ring-2 peer-focus-visible:ring-ring">
-                    <span className="flex items-center gap-2 text-sm font-medium text-fg">
-                      <Icon
-                        name={option.id === "opencode-go" ? "sparkles" : "key-round"}
-                        size={14}
-                        className="text-accent-text"
-                      />
-                      {option.label}
-                    </span>
-                    <span className="mt-1 text-[11px] leading-5 text-subtle">
-                      {option.description}
-                    </span>
-                    <span className="mt-1 truncate font-mono text-[10px] text-subtle">
-                      {option.defaultBaseUrl}
-                    </span>
-                  </span>
-                </label>
-              ))}
+          <FormField
+            id="model-provider"
+            label="服务商"
+            required
+            hint={providerDefinition.description}
+          >
+            <div className="relative">
+              <select
+                id="model-provider"
+                value={provider}
+                onChange={(event) => selectProvider(event.target.value as ModelProviderId)}
+                className={cn(selectClass, "appearance-none pr-8")}
+              >
+                {chatProviders.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <Icon
+                name="chevron-down"
+                size={13}
+                className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-subtle"
+              />
             </div>
-          </fieldset>
+          </FormField>
 
           <FormField
             id="model-api-key"
@@ -415,13 +416,13 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
               }}
               list={`model-options-${provider}`}
               spellCheck={false}
-              placeholder={providerDefinition.models[0]?.id ?? "model-id"}
+              placeholder={chatModels[0]?.id ?? "model-id"}
               aria-invalid={errors.modelId ? true : undefined}
               aria-describedby={errors.modelId ? "model-id-error" : "model-id-hint"}
               className={cn(inputClass, "font-mono")}
             />
             <datalist id={`model-options-${provider}`}>
-              {providerDefinition.models.map((model) => (
+              {chatModels.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.label}
                 </option>
@@ -462,11 +463,6 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
               </span>
             </span>
           </label>
-
-          <InfoBanner tone="accent" icon="lock" title="密钥由服务端加密保存">
-            API Key 使用 AES-256-GCM 加密后写入数据库，接口只返回 hasApiKey
-            与末尾四位。浏览器不再使用 localStorage 或 sessionStorage 保存密钥。
-          </InfoBanner>
         </form>
       </div>
     </Drawer>

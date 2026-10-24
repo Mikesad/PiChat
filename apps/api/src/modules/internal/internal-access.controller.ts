@@ -13,8 +13,6 @@ import { InternalAccessService } from "./internal-access.service";
 const principalSchema = z.object({
   tenantId: z.string().min(1).max(64),
   userId: z.string().min(1).max(64),
-  role: z.enum(["member", "knowledge_admin", "security_admin", "tenant_admin"]),
-  groupIds: z.array(z.string().min(1).max(64)).max(200),
 });
 
 const scopeSchema = z.object({

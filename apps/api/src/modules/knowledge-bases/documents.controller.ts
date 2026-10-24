@@ -18,6 +18,8 @@ import type {
   AclException,
   ReparseDocumentResponse,
   SessionUser,
+  UpdateDocumentAclModeRequest,
+  UpdateDocumentAclModeResponse,
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
 } from "@pichat/shared";
@@ -38,6 +40,10 @@ const aclExceptionSchema = z.object({
 
 const updateDocumentAclSchema = z.object({
   exceptions: z.array(aclExceptionSchema).max(200),
+});
+
+const updateDocumentAclModeSchema = z.object({
+  mode: z.enum(["inherit", "restricted"]),
 });
 
 @Controller("documents")
@@ -102,6 +108,16 @@ export class DocumentsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Param("id") id: string, @CurrentUser() user: SessionUser): Promise<void> {
     await this.documentsService.remove(user, id);
+  }
+
+  @Put(":id/acl-mode")
+  async updateAclMode(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @CurrentUser() user: SessionUser,
+  ): Promise<UpdateDocumentAclModeResponse> {
+    const input = parseBody<UpdateDocumentAclModeRequest>(updateDocumentAclModeSchema, body);
+    return this.knowledgeBasesService.updateDocumentAclMode(user, id, input.mode);
   }
 
   @Put(":id/acl")

@@ -3,22 +3,23 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  type AclException,
+  type AclPermission,
   type AclSubject,
   type AdminDocument,
   type AdminKnowledgeBase,
   documentStats,
   findKnowledgeBase,
   subjectKey,
-  subjectMemberCount,
-  subjectName,
 } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
 import { DocumentPreviewDialog } from "../document-preview-dialog";
 import { Icon, Spinner } from "../icons";
 import { IconButton } from "../ui";
-import { BulkAclDrawer, DocumentAclDrawer, SubjectSelect } from "./acl";
+import { BulkAclDrawer, DocumentAclDrawer, PermissionSelect, SubjectSelect } from "./acl";
 import { useAdminData } from "./admin-data";
 import { ConfirmDialog } from "./confirm-dialog";
+import { useDirectory } from "./directory";
 import { Tabs } from "./tabs";
 import { useToast } from "./toast";
 import {
@@ -35,6 +36,7 @@ import {
   SelectAllCheckbox,
   StatStrip,
   StatusBadge,
+  selectClass,
   TableShell,
   tdClass,
   textareaClass,
@@ -77,6 +79,14 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
   const [uploadOpen, setUploadOpen] = useState(false);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
   const [previewDocument, setPreviewDocument] = useState<AdminDocument | null>(null);
+
+  function handlePreview(document: AdminDocument) {
+    if (!document.canRead) {
+      showToast("没有阅读权限，请联系管理员申请");
+      return;
+    }
+    setPreviewDocument(document);
+  }
 
   async function handleReparse(documentId: string) {
     const document = knowledgeBase?.documents.find((item) => item.id === documentId);
@@ -206,7 +216,11 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
       <Tabs
         items={[
           { id: "documents", label: "文档", count: stats.total },
-          { id: "access", label: "访问范围", count: knowledgeBase.defaultSubjects.length },
+          {
+            id: "access",
+            label: "访问范围",
+            count: knowledgeBase.defaultSubjects.length + knowledgeBase.deniedSubjects.length,
+          },
           { id: "settings", label: "设置" },
         ]}
         value={tab}
@@ -226,7 +240,7 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
             onOpenAcl={setAclDocumentId}
             onUpload={() => setUploadOpen(true)}
             onRetry={handleReparse}
-            onPreview={setPreviewDocument}
+            onPreview={handlePreview}
           />
         ) : null}
         {tab === "access" ? (
@@ -643,16 +657,28 @@ function DocumentRow({
         ) : null}
       </td>
       <td className={tdClass}>
-        <button
-          type="button"
-          onClick={onPreview}
-          className="block max-w-[300px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
-          title={`预览 ${document.title}`}
-        >
-          {document.title}
-        </button>
+        {document.canRead ? (
+          <button
+            type="button"
+            onClick={onPreview}
+            className="block max-w-[300px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+            title={`预览 ${document.title}`}
+          >
+            {document.title}
+          </button>
+        ) : (
+          <div className="flex max-w-[300px] items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-fg">{document.title}</span>
+            <Badge tone="warning" className="shrink-0">
+              <Icon name="lock" size={10} />
+              无权限
+            </Badge>
+          </div>
+        )}
         <p className="mt-0.5 text-[11px] text-subtle">
-          {document.sizeLabel ?? "—"} · {document.updatedLabel}
+          {document.canRead
+            ? `${document.sizeLabel ?? "—"} · ${document.updatedLabel}`
+            : "联系管理员申请阅读权限"}
         </p>
         {document.status === "failed" && document.errorMessage ? (
           <p
@@ -664,7 +690,10 @@ function DocumentRow({
         ) : null}
       </td>
       <td className={tdClass}>
-        <StatusBadge status={document.status} />
+        <div className="flex flex-wrap items-center gap-1">
+          <StatusBadge status={document.status} />
+          {document.aclMode === "restricted" ? <Badge tone="accent">独立授权</Badge> : null}
+        </div>
       </td>
       <td className={tdClass}>
         {document.effectiveReaderCount === 0 ? (
@@ -693,7 +722,11 @@ function DocumentRow({
       </td>
       <td className={`${tdClass} text-right`}>
         <div className="flex items-center justify-end gap-0.5">
-          <IconButton label="预览文档" icon="eye" onClick={onPreview} />
+          {document.canRead ? (
+            <IconButton label="预览文档" icon="eye" onClick={onPreview} />
+          ) : (
+            <IconButton label="没有阅读权限，请联系管理员申请" icon="lock" disabled />
+          )}
           {canManage ? (
             <>
               <IconButton label="管理与权限" icon="shield-check" onClick={onOpenAcl} />
@@ -758,16 +791,30 @@ function MobileDocumentCard({
           <Icon name="file-text" size={15} />
         </span>
         <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={onPreview}
-            className="block max-w-full cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
-            title={`预览 ${document.title}`}
-          >
-            {document.title}
-          </button>
+          <div className="flex min-w-0 items-center gap-1.5">
+            {document.canRead ? (
+              <button
+                type="button"
+                onClick={onPreview}
+                className="block max-w-full cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+                title={`预览 ${document.title}`}
+              >
+                {document.title}
+              </button>
+            ) : (
+              <span className="truncate text-sm font-medium text-fg">{document.title}</span>
+            )}
+            {document.canRead ? null : (
+              <Badge tone="warning" className="shrink-0">
+                <Icon name="lock" size={10} />
+                无权限
+              </Badge>
+            )}
+          </div>
           <p className="mt-0.5 text-[11px] text-subtle">
-            {document.sizeLabel ?? "—"} · {document.updatedLabel}
+            {document.canRead
+              ? `${document.sizeLabel ?? "—"} · ${document.updatedLabel}`
+              : "联系管理员申请阅读权限"}
           </p>
           {document.status === "failed" && document.errorMessage ? (
             <p className="mt-0.5 text-[11px] text-danger">{document.errorMessage}</p>
@@ -776,6 +823,7 @@ function MobileDocumentCard({
         <StatusBadge status={document.status} />
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
+        {document.aclMode === "restricted" ? <Badge tone="accent">独立授权</Badge> : null}
         {document.effectiveReaderCount === 0 ? (
           <Badge tone="warning">无人可访问</Badge>
         ) : (
@@ -785,10 +833,17 @@ function MobileDocumentCard({
         {denyCount > 0 ? <span className="text-danger">{denyCount} 条拒绝</span> : null}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={onPreview}>
-          <Icon name="eye" size={13} />
-          预览
-        </Button>
+        {document.canRead ? (
+          <Button size="sm" variant="secondary" onClick={onPreview}>
+            <Icon name="eye" size={13} />
+            预览
+          </Button>
+        ) : (
+          <Button size="sm" variant="secondary" disabled>
+            <Icon name="lock" size={13} />
+            无权限
+          </Button>
+        )}
         {canManage ? (
           <>
             <Button size="sm" variant="secondary" onClick={onOpenAcl}>
@@ -819,25 +874,54 @@ function AccessTab({
   knowledgeBase: AdminKnowledgeBase;
   onOpenAcl: (documentId: string) => void;
 }) {
-  const { setDefaultSubjects } = useAdminData();
+  const { setAccessSubjects } = useAdminData();
+  const { subjectName, subjectMemberCount } = useDirectory();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
-  const [subjects, setSubjects] = useState<AclSubject[]>(knowledgeBase.defaultSubjects);
+  const [subjects, setSubjects] = useState<AclException[]>(() => [
+    ...knowledgeBase.defaultSubjects.map((subject) => ({
+      ...subject,
+      permission: "read" as const,
+    })),
+    ...knowledgeBase.deniedSubjects.map((subject) => ({ ...subject, permission: "deny" as const })),
+  ]);
   const [subjectValue, setSubjectValue] = useState("");
+  const [permission, setPermission] = useState<AclPermission>("read");
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setSubjects(knowledgeBase.defaultSubjects);
-  }, [knowledgeBase.defaultSubjects]);
+    setSubjects([
+      ...knowledgeBase.defaultSubjects.map((subject) => ({
+        ...subject,
+        permission: "read" as const,
+      })),
+      ...knowledgeBase.deniedSubjects.map((subject) => ({
+        ...subject,
+        permission: "deny" as const,
+      })),
+    ]);
+  }, [knowledgeBase.defaultSubjects, knowledgeBase.deniedSubjects]);
 
+  const originalSubjects = [
+    ...knowledgeBase.defaultSubjects.map((subject) => ({
+      ...subject,
+      permission: "read" as const,
+    })),
+    ...knowledgeBase.deniedSubjects.map((subject) => ({ ...subject, permission: "deny" as const })),
+  ];
   const dirty =
-    subjects.length !== knowledgeBase.defaultSubjects.length ||
+    subjects.length !== originalSubjects.length ||
     subjects.some(
       (subject) =>
-        !knowledgeBase.defaultSubjects.some((item) => subjectKey(item) === subjectKey(subject)),
+        !originalSubjects.some(
+          (item) =>
+            subjectKey(item) === subjectKey(subject) && item.permission === subject.permission,
+        ),
     );
+  const allowCount = subjects.filter((subject) => subject.permission === "read").length;
+  const denyCount = subjects.length - allowCount;
   const docsWithExceptions = knowledgeBase.documents.filter(
     (document) => document.exceptions.length > 0,
   );
@@ -856,14 +940,14 @@ function AccessTab({
   function addSubject() {
     const subject = parseSubject(subjectValue);
     if (!subject) {
-      setError("请选择用户或用户组");
+      setError("请选择用户或部门");
       return;
     }
     if (subjects.some((item) => subjectKey(item) === subjectKey(subject))) {
-      setError("该主体已在默认范围中");
+      setError("该主体已在访问范围中，请先移除再调整权限");
       return;
     }
-    setSubjects((previous) => [...previous, subject]);
+    setSubjects((previous) => [...previous, { ...subject, permission }]);
     setSubjectValue("");
     setError(null);
   }
@@ -871,8 +955,8 @@ function AccessTab({
   async function handleSave() {
     setSaving(true);
     try {
-      await setDefaultSubjects(knowledgeBase.id, subjects);
-      showToast("默认访问范围已更新，下一次提问生效");
+      await setAccessSubjects(knowledgeBase.id, subjects);
+      showToast("知识库访问范围已更新，下一次提问生效");
       setConfirmOpen(false);
     } catch (cause) {
       await handleApiError(cause);
@@ -883,17 +967,12 @@ function AccessTab({
 
   return (
     <div className="space-y-4">
-      <InfoBanner tone="accent" icon="shield-check" title="默认范围对全库生效">
-        知识库默认范围应用于全部文档；文档例外叠加在其上，拒绝规则优先。有效人数由服务端按租户活跃用户与
-        ACL 计算，保存后会重新拉取。
-      </InfoBanner>
-
       <div className="rounded-xl border border-border bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <div>
             <h2 className="text-sm font-medium text-fg">默认访问范围</h2>
             <p className="mt-0.5 text-[11px] text-subtle">
-              {subjects.length} 个主体 · 保存后由服务端重新计算有效人数
+              {allowCount} 个允许 · {denyCount} 个禁止 · 保存后由服务端重新计算有效人数
             </p>
           </div>
           {knowledgeBase.canManageAcl ? (
@@ -908,18 +987,19 @@ function AccessTab({
         <div className="p-4">
           {knowledgeBase.canManageAcl ? (
             <>
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
                 <SubjectSelect
                   value={subjectValue}
                   onChange={(value) => {
                     setSubjectValue(value);
                     setError(null);
                   }}
-                  label="选择默认访问范围的用户或用户组"
+                  label="选择默认访问范围的用户或部门"
                 />
+                <PermissionSelect value={permission} onChange={setPermission} label="选择权限" />
                 <Button variant="secondary" onClick={addSubject}>
                   <Icon name="plus" size={14} />
-                  添加主体
+                  添加
                 </Button>
               </div>
               {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
@@ -931,7 +1011,7 @@ function AccessTab({
           {subjects.length === 0 ? (
             <div className="mt-3">
               <InfoBanner tone="warning" icon="lock" title="未设置默认范围">
-                普通成员无法读取该知识库中的文档，只有租户管理员和文档级读取例外可读。
+                普通成员默认无法读取该知识库中的文档；可单独添加文档级读取例外，但知识库级禁止无法被覆盖。
               </InfoBanner>
             </div>
           ) : (
@@ -939,12 +1019,20 @@ function AccessTab({
               {subjects.map((subject) => (
                 <li
                   key={subjectKey(subject)}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2"
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border px-3 py-2",
+                    subject.permission === "deny"
+                      ? "border-danger/30 bg-danger-soft/60"
+                      : "border-border bg-surface",
+                  )}
                 >
                   <Icon
                     name={subject.type === "group" ? "users" : "user"}
                     size={14}
-                    className="shrink-0 text-subtle"
+                    className={cn(
+                      "shrink-0",
+                      subject.permission === "deny" ? "text-danger" : "text-subtle",
+                    )}
                   />
                   <span className="min-w-0 flex-1 truncate text-sm text-fg">
                     {subjectName(subject)}
@@ -952,6 +1040,9 @@ function AccessTab({
                   <span className="shrink-0 text-[11px] text-subtle">
                     {subjectMemberCount(subject)} 人
                   </span>
+                  <Badge tone={subject.permission === "deny" ? "danger" : "success"}>
+                    {subject.permission === "deny" ? "禁止" : "允许"}
+                  </Badge>
                   {knowledgeBase.canManageAcl ? (
                     <button
                       type="button"
@@ -1020,7 +1111,8 @@ function AccessTab({
 
       {noAccessDocuments.length > 0 ? (
         <InfoBanner tone="warning" icon="alert-circle" title="有文档没有任何活跃用户可读">
-          {noAccessDocuments.length} 篇文档当前没有有效读者。请确认默认范围或添加文档例外。
+          {noAccessDocuments.length}{" "}
+          篇文档当前没有有效读者。请确认默认范围；若存在知识库级禁止，文档读取例外无法覆盖。
         </InfoBanner>
       ) : null}
 
@@ -1028,9 +1120,9 @@ function AccessTab({
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={handleSave}
-        title="保存默认访问范围？"
-        description={`将影响 ${knowledgeBase.documents.length} 篇文档。保存后由服务端重新计算权限，并在下一次提问时生效。`}
-        confirmLabel={subjects.length === 0 ? "保存并移除默认访问" : "保存默认范围"}
+        title="保存知识库访问范围？"
+        description={`将影响 ${knowledgeBase.documents.length} 篇文档。禁止优先于允许，并覆盖文档读取例外；保存后由服务端重新计算权限，并在下一次提问时生效。`}
+        confirmLabel={subjects.length === 0 ? "保存并清空访问范围" : "保存访问范围"}
         tone={subjects.length === 0 ? "danger" : "primary"}
       />
     </div>
@@ -1045,10 +1137,12 @@ function SettingsTab({
   onDeleted: () => void;
 }) {
   const { deleteKnowledgeBase, updateKnowledgeBase } = useAdminData();
+  const { groups, members } = useDirectory();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
   const [name, setName] = useState(knowledgeBase.name);
   const [description, setDescription] = useState(knowledgeBase.description);
+  const [ownerDepartmentId, setOwnerDepartmentId] = useState(knowledgeBase.ownerDepartmentId ?? "");
   const [retrievalTopK, setRetrievalTopK] = useState(knowledgeBase.retrievalTopK);
   const [retrievalSimilarityThreshold, setRetrievalSimilarityThreshold] = useState(
     knowledgeBase.retrievalSimilarityThreshold,
@@ -1064,6 +1158,7 @@ function SettingsTab({
   const dirty =
     name !== knowledgeBase.name ||
     description !== knowledgeBase.description ||
+    ownerDepartmentId !== (knowledgeBase.ownerDepartmentId ?? "") ||
     retrievalTopK !== knowledgeBase.retrievalTopK ||
     retrievalSimilarityThreshold !== knowledgeBase.retrievalSimilarityThreshold ||
     retrievalVectorWeight !== knowledgeBase.retrievalVectorWeight;
@@ -1100,6 +1195,7 @@ function SettingsTab({
       await updateKnowledgeBase(knowledgeBase.id, {
         name: name.trim(),
         description,
+        ownerDepartmentId: ownerDepartmentId || null,
         retrievalTopK: Math.round(retrievalTopK),
         retrievalSimilarityThreshold,
         retrievalVectorWeight,
@@ -1131,11 +1227,6 @@ function SettingsTab({
 
   return (
     <div className="space-y-4">
-      <InfoBanner tone="neutral" icon="info" title="检索参数即时生效">
-        这里的检索参数会保存到服务端，并在下一次问答时由 Agent Runtime 使用。分块大小和切分方法仍由
-        RAGFlow 数据集配置决定，修改后需要重新解析文档。
-      </InfoBanner>
-
       <div className="rounded-xl border border-border bg-surface p-4 sm:p-5">
         <h2 className="text-sm font-medium text-fg">基本信息</h2>
         <div className="mt-3 max-w-2xl space-y-4">
@@ -1163,6 +1254,26 @@ function SettingsTab({
               className={textareaClass}
             />
           </FormField>
+          <FormField
+            id="settings-department"
+            label="归属部门"
+            hint="仅用于归属展示与筛选，不会自动改变任何文档的访问权限。"
+          >
+            <select
+              id="settings-department"
+              value={ownerDepartmentId}
+              onChange={(event) => setOwnerDepartmentId(event.target.value)}
+              disabled={!knowledgeBase.canManageAcl}
+              className={selectClass}
+            >
+              <option value="">未设置</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
           <div className="flex justify-end">
             <Button
               onClick={() => void handleSave()}
@@ -1184,6 +1295,14 @@ function SettingsTab({
           <div>
             <dt className="text-[11px] text-subtle">RAGFlow 数据集</dt>
             <dd className="mt-1 font-mono text-xs text-fg">{knowledgeBase.ragflowDatasetId}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] text-subtle">创建者</dt>
+            <dd className="mt-1 text-sm text-fg">
+              {members.find((member) => member.id === knowledgeBase.ownerId)?.displayName ??
+                knowledgeBase.ownerId ??
+                "—"}
+            </dd>
           </div>
           <div>
             <dt className="text-[11px] text-subtle">创建时间</dt>
@@ -1250,12 +1369,6 @@ function SettingsTab({
         <p className="mt-2 text-[11px] text-subtle">
           向量权重越高越偏向语义检索；越低越偏向关键词检索。修改后下一次提问生效。
         </p>
-        <div className="mt-3">
-          <InfoBanner tone="warning" icon="lock" title="配置锁定">
-            Embedding 模型创建后不可更改；更换模型需要新建知识库并重新解析全部文档。RAGFlow API Key
-            只保存在服务端。
-          </InfoBanner>
-        </div>
       </div>
 
       <div className="rounded-xl border border-danger/30 bg-danger-soft/40 p-4 sm:p-5">

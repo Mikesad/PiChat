@@ -5,6 +5,7 @@ import { modelConfigs } from "@pichat/db";
 import type {
   CreateModelConfigRequest,
   ModelConfigSummary,
+  ModelKind,
   ModelProviderId,
   SessionUser,
   UpdateModelConfigRequest,
@@ -32,13 +33,19 @@ export class ModelConfigsService {
     @Inject(MODEL_CONFIG_CRYPTO) private readonly crypto: ModelConfigCrypto,
   ) {}
 
-  async list(principal: SessionUser): Promise<ModelConfigSummary[]> {
+  async list(principal: SessionUser, kind?: ModelKind): Promise<ModelConfigSummary[]> {
+    const conditions = [
+      eq(modelConfigs.tenantId, principal.tenantId),
+      eq(modelConfigs.userId, principal.id),
+    ];
+    if (kind) {
+      conditions.push(eq(modelConfigs.kind, kind));
+    }
+
     const rows = await this.db
       .select()
       .from(modelConfigs)
-      .where(
-        and(eq(modelConfigs.tenantId, principal.tenantId), eq(modelConfigs.userId, principal.id)),
-      )
+      .where(and(...conditions))
       .orderBy(desc(modelConfigs.isDefault), desc(modelConfigs.updatedAt));
 
     return rows.map((row) => this.toSummary(row));
@@ -48,7 +55,12 @@ export class ModelConfigsService {
     principal: SessionUser,
     input: CreateModelConfigRequest,
   ): Promise<ModelConfigSummary> {
-    const duplicate = await this.findByProviderModel(principal, input.provider, input.modelId);
+    const duplicate = await this.findByProviderModel(
+      principal,
+      input.kind,
+      input.provider,
+      input.modelId,
+    );
     if (duplicate) {
       throw conflict("同一服务商与模型已存在配置");
     }
@@ -66,6 +78,7 @@ export class ModelConfigsService {
             and(
               eq(modelConfigs.tenantId, principal.tenantId),
               eq(modelConfigs.userId, principal.id),
+              eq(modelConfigs.kind, input.kind),
             ),
           );
       }
@@ -74,6 +87,7 @@ export class ModelConfigsService {
         id,
         tenantId: principal.tenantId,
         userId: principal.id,
+        kind: input.kind,
         provider: input.provider,
         modelId: input.modelId,
         displayName: input.displayName,
@@ -112,7 +126,13 @@ export class ModelConfigsService {
       throw notFound();
     }
 
-    const duplicate = await this.findByProviderModel(principal, input.provider, input.modelId, id);
+    const duplicate = await this.findByProviderModel(
+      principal,
+      input.kind,
+      input.provider,
+      input.modelId,
+      id,
+    );
     if (duplicate) {
       throw conflict("同一服务商与模型已存在配置");
     }
@@ -132,6 +152,7 @@ export class ModelConfigsService {
             and(
               eq(modelConfigs.tenantId, principal.tenantId),
               eq(modelConfigs.userId, principal.id),
+              eq(modelConfigs.kind, input.kind),
             ),
           );
       }
@@ -139,6 +160,7 @@ export class ModelConfigsService {
       await tx
         .update(modelConfigs)
         .set({
+          kind: input.kind,
           provider: input.provider,
           modelId: input.modelId,
           displayName: input.displayName,
@@ -200,7 +222,11 @@ export class ModelConfigsService {
         .update(modelConfigs)
         .set({ isDefault: false })
         .where(
-          and(eq(modelConfigs.tenantId, principal.tenantId), eq(modelConfigs.userId, principal.id)),
+          and(
+            eq(modelConfigs.tenantId, principal.tenantId),
+            eq(modelConfigs.userId, principal.id),
+            eq(modelConfigs.kind, existing.kind),
+          ),
         );
 
       await tx
@@ -238,47 +264,33 @@ export class ModelConfigsService {
     principal: SessionUser,
     modelConfigId?: string,
   ): Promise<ResolvedModelConfig> {
+    const resolved = await this.resolveOptionalForKind(principal, "chat", modelConfigId);
+    if (!resolved) {
+      throw conflict("请先在账号菜单中配置可用模型");
+    }
+    return resolved;
+  }
+
+  async resolveOptionalForKind(
+    principal: SessionUser,
+    kind: ModelKind,
+    modelConfigId?: string,
+  ): Promise<ResolvedModelConfig | null> {
     let row: ModelConfig | null = null;
 
     if (modelConfigId) {
       row = await this.findOwned(principal, modelConfigId);
-      if (!row) {
+      if (!row || row.kind !== kind) {
         throw notFound();
       }
     } else {
-      const defaultRows = await this.db
-        .select()
-        .from(modelConfigs)
-        .where(
-          and(
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-            eq(modelConfigs.isDefault, true),
-            eq(modelConfigs.enabled, true),
-          ),
-        )
-        .limit(1);
-      row = defaultRows[0] ?? null;
-
-      if (!row) {
-        const fallbackRows = await this.db
-          .select()
-          .from(modelConfigs)
-          .where(
-            and(
-              eq(modelConfigs.tenantId, principal.tenantId),
-              eq(modelConfigs.userId, principal.id),
-              eq(modelConfigs.enabled, true),
-            ),
-          )
-          .orderBy(desc(modelConfigs.updatedAt))
-          .limit(1);
-        row = fallbackRows[0] ?? null;
-      }
+      row = await this.findActiveByKind(principal, kind);
     }
-
-    if (!row?.enabled) {
-      throw conflict("请先在账号菜单中配置可用模型");
+    if (!row) {
+      return null;
+    }
+    if (!row.enabled) {
+      throw conflict("模型配置已停用，请重新启用");
     }
     if (!row.encryptedApiKey) {
       throw conflict("模型配置缺少 API Key，请重新保存");
@@ -302,6 +314,48 @@ export class ModelConfigsService {
     };
   }
 
+  async findActiveModelId(principal: SessionUser, kind: ModelKind): Promise<string | null> {
+    const row = await this.findActiveByKind(principal, kind);
+    return row?.modelId ?? null;
+  }
+
+  private async findActiveByKind(
+    principal: SessionUser,
+    kind: ModelKind,
+  ): Promise<ModelConfig | null> {
+    const defaultRows = await this.db
+      .select()
+      .from(modelConfigs)
+      .where(
+        and(
+          eq(modelConfigs.tenantId, principal.tenantId),
+          eq(modelConfigs.userId, principal.id),
+          eq(modelConfigs.kind, kind),
+          eq(modelConfigs.isDefault, true),
+          eq(modelConfigs.enabled, true),
+        ),
+      )
+      .limit(1);
+    if (defaultRows[0]) {
+      return defaultRows[0];
+    }
+
+    const fallbackRows = await this.db
+      .select()
+      .from(modelConfigs)
+      .where(
+        and(
+          eq(modelConfigs.tenantId, principal.tenantId),
+          eq(modelConfigs.userId, principal.id),
+          eq(modelConfigs.kind, kind),
+          eq(modelConfigs.enabled, true),
+        ),
+      )
+      .orderBy(desc(modelConfigs.updatedAt))
+      .limit(1);
+    return fallbackRows[0] ?? null;
+  }
+
   private async findOwned(principal: SessionUser, id: string): Promise<ModelConfig | null> {
     const rows = await this.db
       .select()
@@ -319,6 +373,7 @@ export class ModelConfigsService {
 
   private async findByProviderModel(
     principal: SessionUser,
+    kind: ModelKind,
     provider: string,
     modelId: string,
     excludeId?: string,
@@ -326,6 +381,7 @@ export class ModelConfigsService {
     const conditions = [
       eq(modelConfigs.tenantId, principal.tenantId),
       eq(modelConfigs.userId, principal.id),
+      eq(modelConfigs.kind, kind),
       eq(modelConfigs.provider, provider),
       eq(modelConfigs.modelId, modelId),
     ];
@@ -350,6 +406,7 @@ export class ModelConfigsService {
 
     return {
       id: row.id,
+      kind: row.kind as ModelConfigSummary["kind"],
       provider: row.provider as ModelConfigSummary["provider"],
       modelId: row.modelId,
       displayName: row.displayName,

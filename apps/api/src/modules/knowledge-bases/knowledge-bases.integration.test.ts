@@ -4,19 +4,19 @@ import {
   auditLogs,
   createDatabase,
   type Database,
+  departments,
   documents,
-  groupMembers,
-  groups,
   knowledgeBaseAcls,
   knowledgeBases,
   tenants,
   users,
 } from "@pichat/db";
 import type { SessionUser } from "@pichat/shared";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AccessControlService } from "../access-control/access-control.service";
 import type { IngestionQueueService } from "../ingestion/ingestion-queue.service";
+import type { ModelConfigsService } from "../model-configs/model-configs.service";
 import type { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
@@ -39,7 +39,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
     email: "admin@test.local",
     displayName: "Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const knowledgeAdminUser: SessionUser = {
     id: knowledgeAdminId,
@@ -47,7 +47,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
     email: "knowledge-admin@test.local",
     displayName: "Knowledge Admin",
     role: "knowledge_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const memberUser: SessionUser = {
     id: memberId,
@@ -55,7 +55,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
     email: "member@test.local",
     displayName: "Member",
     role: "member",
-    groupIds: [groupId],
+    departmentId: groupId,
   };
   const foreignUser: SessionUser = {
     id: randomUUID(),
@@ -63,7 +63,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
     email: "foreign@test.local",
     displayName: "Foreign",
     role: "member",
-    groupIds: [],
+    departmentId: null,
   };
 
   let db: Database;
@@ -92,9 +92,13 @@ describeWithDatabase("knowledge base ACL integration", () => {
       remote as unknown as KnowledgeBaseRemoteService,
       queue as unknown as IngestionQueueService,
       config,
+      { resolveOptionalForKind: async () => null } as unknown as ModelConfigsService,
     );
 
     await db.insert(tenants).values({ id: tenantId, name: "ACL Test", slug: tenantId });
+    await db
+      .insert(departments)
+      .values({ id: groupId, tenantId, name: "ACL Test Group", externalId: null });
     await db.insert(users).values([
       {
         id: adminId,
@@ -119,6 +123,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
         passwordHash: "scrypt$00$00",
         displayName: memberUser.displayName,
         role: "member",
+        departmentId: groupId,
       },
       {
         id: outsiderId,
@@ -129,14 +134,6 @@ describeWithDatabase("knowledge base ACL integration", () => {
         role: "member",
       },
     ]);
-    await db
-      .insert(groups)
-      .values({ id: groupId, tenantId, name: "ACL Test Group", externalId: null });
-    await db.insert(groupMembers).values({
-      id: randomUUID(),
-      groupId,
-      userId: memberId,
-    });
     await db.insert(knowledgeBases).values({
       id: knowledgeBaseId,
       tenantId,
@@ -188,7 +185,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
         tenantId: memberUser.tenantId,
         userId: memberUser.id,
         role: memberUser.role,
-        groupIds: memberUser.groupIds,
+        departmentId: memberUser.departmentId,
       },
       knowledgeBaseId,
     );
@@ -207,7 +204,7 @@ describeWithDatabase("knowledge base ACL integration", () => {
         tenantId: memberUser.tenantId,
         userId: memberUser.id,
         role: memberUser.role,
-        groupIds: memberUser.groupIds,
+        departmentId: memberUser.departmentId,
       },
       knowledgeBaseId,
     );
@@ -260,16 +257,57 @@ describeWithDatabase("knowledge base ACL integration", () => {
   });
 
   it("lets knowledge admins list all document metadata without granting read access", async () => {
-    const documents = await service.listDocuments(knowledgeBaseId, knowledgeAdminUser);
+    const { documents, pagination } = await service.listDocuments(
+      knowledgeBaseId,
+      knowledgeAdminUser,
+    );
     expect(documents.map((document) => document.id).sort()).toEqual(
       [allowedDocumentId, deniedDocumentId].sort(),
     );
     expect(documents.every((document) => document.canManageAcl)).toBe(true);
+    expect(pagination).toMatchObject({ page: 1, pageSize: 10, total: 2, totalPages: 1 });
 
     await expect(service.accessCheck(deniedDocumentId, knowledgeAdminUser)).resolves.toMatchObject({
       allowed: false,
       reason: "no_grant",
     });
+  });
+
+  it("lists locked documents to users without read access when requested", async () => {
+    const outsiderUser: SessionUser = {
+      id: outsiderId,
+      tenantId,
+      email: "outsider@test.local",
+      displayName: "Outsider",
+      role: "member",
+      departmentId: null,
+    };
+
+    await expect(service.listDocuments(knowledgeBaseId, outsiderUser)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    expect((await service.list(outsiderUser)).knowledgeBases.map((item) => item.id)).not.toContain(
+      knowledgeBaseId,
+    );
+
+    const { knowledgeBases: summaries, pagination: knowledgeBasePagination } = await service.list(
+      outsiderUser,
+      true,
+    );
+    expect(summaries.find((item) => item.id === knowledgeBaseId)?.readableDocumentCount).toBe(0);
+    expect(knowledgeBasePagination).toMatchObject({
+      page: 1,
+      pageSize: 10,
+      total: summaries.length,
+      totalPages: 1,
+    });
+
+    const { documents } = await service.listDocuments(knowledgeBaseId, outsiderUser, true);
+    expect(documents.map((document) => document.id).sort()).toEqual(
+      [allowedDocumentId, deniedDocumentId].sort(),
+    );
+    expect(documents.every((document) => document.canRead === false)).toBe(true);
+    expect(documents.every((document) => document.exceptions.length === 0)).toBe(true);
   });
 
   it("does not leak documents across tenants", async () => {
@@ -278,12 +316,84 @@ describeWithDatabase("knowledge base ACL integration", () => {
         tenantId: foreignUser.tenantId,
         userId: foreignUser.id,
         role: foreignUser.role,
-        groupIds: foreignUser.groupIds,
+        departmentId: foreignUser.departmentId,
       }),
     ).toBeNull();
 
     await expect(service.accessCheck(allowedDocumentId, foreignUser)).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+
+  it("lets a knowledge-base deny override document read exceptions", async () => {
+    await service.updateDocumentAcl(adminUser, allowedDocumentId, [
+      { type: "user", id: memberId, permission: "read" },
+    ]);
+
+    const result = await service.updateKnowledgeBaseAcl(
+      adminUser,
+      knowledgeBaseId,
+      [{ type: "group", id: groupId }],
+      [{ type: "user", id: memberId }],
+    );
+    expect(result.knowledgeBase.defaultSubjects).toEqual([{ type: "group", id: groupId }]);
+    expect(result.knowledgeBase.deniedSubjects).toEqual([{ type: "user", id: memberId }]);
+
+    const principal = {
+      tenantId: memberUser.tenantId,
+      userId: memberUser.id,
+      role: memberUser.role,
+      departmentId: memberUser.departmentId,
+    };
+    expect([...(await accessControl.listReadableDocumentIds(principal, knowledgeBaseId))]).toEqual(
+      [],
+    );
+    await expect(service.accessCheck(allowedDocumentId, memberUser)).resolves.toMatchObject({
+      allowed: false,
+      reason: "explicit_deny",
+    });
+    expect((await service.list(memberUser)).knowledgeBases.map((item) => item.id)).not.toContain(
+      knowledgeBaseId,
+    );
+
+    const auditRows = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.action, "knowledge_base.acl.update"),
+          eq(auditLogs.resourceId, knowledgeBaseId),
+        ),
+      )
+      .orderBy(desc(auditLogs.id))
+      .limit(1);
+    const metadata = auditRows[0]?.metadata as {
+      after?: Array<{ type: string; id: string; permission: string }>;
+    };
+    expect(metadata.after).toEqual(
+      expect.arrayContaining([
+        { type: "group", id: groupId, permission: "read" },
+        { type: "user", id: memberId, permission: "deny" },
+      ]),
+    );
+  });
+
+  it("rejects a subject that is both allowed and denied at knowledge-base level", async () => {
+    await expect(
+      service.updateKnowledgeBaseAcl(
+        adminUser,
+        knowledgeBaseId,
+        [{ type: "group", id: groupId }],
+        [{ type: "group", id: groupId }],
+      ),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
+  it("preserves knowledge-base deny rules when the field is omitted", async () => {
+    const result = await service.updateKnowledgeBaseAcl(adminUser, knowledgeBaseId, [
+      { type: "group", id: groupId },
+    ]);
+    expect(result.knowledgeBase.deniedSubjects).toEqual([{ type: "user", id: memberId }]);
   });
 });

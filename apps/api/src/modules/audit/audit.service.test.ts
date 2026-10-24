@@ -25,7 +25,7 @@ describeWithDatabase("AuditService", () => {
     email: "audit-admin@test.local",
     displayName: "Audit Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const member: SessionUser = {
     ...admin,
@@ -111,9 +111,15 @@ describeWithDatabase("AuditService", () => {
   });
 
   it("lists tenant logs with actor and resource labels", async () => {
-    const result = await service.list(admin, { limit: 50 });
+    const result = await service.list(admin, { page: 1, pageSize: 50 });
 
     expect(result.logs).toHaveLength(3);
+    expect(result.pagination).toMatchObject({
+      page: 1,
+      pageSize: 50,
+      total: 3,
+      totalPages: 1,
+    });
     const update = result.logs.find((log) => log.action === "knowledge_base.update");
     expect(update).toMatchObject({
       actorName: "Audit Admin",
@@ -126,6 +132,15 @@ describeWithDatabase("AuditService", () => {
       resourceLabel: "Travel.pdf",
       result: "failed",
     });
+  });
+
+  it("paginates audit logs with the default page size", async () => {
+    const first = await service.list(admin, {});
+    expect(first.pagination).toMatchObject({ page: 1, pageSize: 10, total: 3 });
+
+    const second = await service.list(admin, { page: 2, pageSize: 10 });
+    expect(second.logs).toHaveLength(0);
+    expect(second.pagination).toMatchObject({ page: 2, total: 3, totalPages: 1 });
   });
 
   it("filters by action, resource type and result", async () => {

@@ -9,13 +9,16 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import {
   type CreateModelConfigRequest,
+  isModelKind,
   isModelProvider,
   type ModelConfigListResponse,
   type ModelConfigResponse,
+  type ModelKind,
   type ModelProviderId,
   type SessionUser,
   type UpdateModelConfigRequest,
@@ -37,7 +40,12 @@ const providerSchema = z.custom<ModelProviderId>((value) => isModelProvider(valu
   message: "不支持的服务商",
 });
 
+const kindSchema = z.custom<ModelKind>((value) => isModelKind(value), {
+  message: "不支持的模型类型",
+});
+
 const createSchema = z.object({
+  kind: kindSchema,
   provider: providerSchema,
   modelId: z.string().trim().min(1).max(120),
   displayName: z.string().trim().min(1).max(120),
@@ -47,6 +55,7 @@ const createSchema = z.object({
 });
 
 const updateSchema = z.object({
+  kind: kindSchema,
   provider: providerSchema,
   modelId: z.string().trim().min(1).max(120),
   displayName: z.string().trim().min(1).max(120),
@@ -63,8 +72,12 @@ export class ModelConfigsController {
   ) {}
 
   @Get()
-  async list(@CurrentUser() user: SessionUser): Promise<ModelConfigListResponse> {
-    return { modelConfigs: await this.modelConfigsService.list(user) };
+  async list(
+    @CurrentUser() user: SessionUser,
+    @Query("kind") kind?: string,
+  ): Promise<ModelConfigListResponse> {
+    const modelKind = kind && isModelKind(kind) ? kind : undefined;
+    return { modelConfigs: await this.modelConfigsService.list(user, modelKind) };
   }
 
   @Post()

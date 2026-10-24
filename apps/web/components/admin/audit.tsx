@@ -1,6 +1,6 @@
 "use client";
 
-import type { AuditLogSummary } from "@pichat/shared";
+import { type AuditLogSummary, defaultPageSize, type PaginationMeta } from "@pichat/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AuditAction,
@@ -14,6 +14,7 @@ import { ApiError, apiErrorMessage, fetchAuditLogs } from "@/lib/api-client";
 import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { Drawer } from "./drawer";
+import { Pagination } from "./pagination";
 import {
   Badge,
   Button,
@@ -116,13 +117,22 @@ export function AuditPage() {
   const [actionFilter, setActionFilter] = useState<"all" | AuditAction>("all");
   const [resultFilter, setResultFilter] = useState<"all" | AuditResult>("all");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
+  const [total, setTotal] = useState(0);
 
   const reload = useCallback(async () => {
     setStatus((current) => (current === "ready" ? "ready" : "loading"));
     setLoadError(null);
     try {
-      const response = await fetchAuditLogs({ limit: 200 });
+      const response = await fetchAuditLogs({
+        page,
+        pageSize,
+        action: actionFilter === "all" ? undefined : actionFilter,
+        result: resultFilter === "all" ? undefined : resultFilter,
+      });
       setAuditLogs(response.logs.map(toAuditEntry));
+      setTotal(response.pagination.total);
       setStatus("ready");
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) {
@@ -131,11 +141,23 @@ export function AuditPage() {
       setLoadError(apiErrorMessage(cause));
       setStatus("error");
     }
-  }, [logout]);
+  }, [actionFilter, logout, page, pageSize, resultFilter]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const pagination: PaginationMeta = useMemo(() => {
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrevious: page > 1,
+    };
+  }, [page, pageSize, total]);
 
   const normalized = query.trim().toLowerCase();
   const filteredLogs = useMemo(
@@ -176,6 +198,7 @@ export function AuditPage() {
     setQuery("");
     setActionFilter("all");
     setResultFilter("all");
+    setPage(1);
   }
 
   return (
@@ -194,21 +217,17 @@ export function AuditPage() {
 
       <StatStrip
         items={[
-          { label: "今日事件", value: todaysEvents, hint: "含刚刚发生" },
-          { label: "权限变更", value: permissionChanges, hint: "ACL 与默认范围" },
+          { label: "今日事件", value: todaysEvents, hint: "当前页" },
+          { label: "权限变更", value: permissionChanges, hint: "当前页" },
           {
             label: "失败 / 拒绝",
             value: issues,
-            hint: "需要关注",
+            hint: "当前页需关注",
             tone: issues > 0 ? "danger" : "default",
           },
-          { label: "操作者", value: actors, hint: "去重" },
+          { label: "操作者", value: actors, hint: "当前页去重" },
         ]}
       />
-
-      <InfoBanner tone="neutral" icon="clipboard" title="服务端审计流">
-        事件来自 MySQL audit_logs，最多加载最近 200 条；筛选在本地完成。审计事件只读，不可修改。
-      </InfoBanner>
 
       {status === "loading" ? (
         <div className="rounded-xl border border-border bg-surface px-4 py-6 text-sm text-muted">
@@ -231,7 +250,7 @@ export function AuditPage() {
             setQuery(value);
             setSelectedLogId(null);
           }}
-          placeholder="搜索操作者、资源或摘要"
+          placeholder="搜索当前页操作者、资源或摘要"
           label="搜索审计日志"
         />
         <div className="w-full sm:w-52">
@@ -241,7 +260,11 @@ export function AuditPage() {
           <select
             id="audit-action"
             value={actionFilter}
-            onChange={(event) => setActionFilter(event.target.value as "all" | AuditAction)}
+            onChange={(event) => {
+              setActionFilter(event.target.value as "all" | AuditAction);
+              setSelectedLogId(null);
+              setPage(1);
+            }}
             className="h-10 w-full cursor-pointer rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent sm:h-9"
           >
             <option value="all">全部操作</option>
@@ -261,7 +284,11 @@ export function AuditPage() {
           <select
             id="audit-result"
             value={resultFilter}
-            onChange={(event) => setResultFilter(event.target.value as "all" | AuditResult)}
+            onChange={(event) => {
+              setResultFilter(event.target.value as "all" | AuditResult);
+              setSelectedLogId(null);
+              setPage(1);
+            }}
             className="h-10 w-full cursor-pointer rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent sm:h-9"
           >
             <option value="all">全部结果</option>
@@ -303,8 +330,8 @@ export function AuditPage() {
               minWidth={820}
               footer={
                 <>
-                  <span>共 {filteredLogs.length} 条事件</span>
-                  <span>按时间倒序 · 最近 200 条</span>
+                  <span>当前页 {filteredLogs.length} 条</span>
+                  <span>按时间倒序</span>
                 </>
               }
             >
@@ -333,6 +360,19 @@ export function AuditPage() {
               <AuditCard key={log.id} log={log} onOpen={() => setSelectedLogId(log.id)} />
             ))}
           </ul>
+
+          <Pagination
+            pagination={pagination}
+            onPageChange={(next) => {
+              setPage(next);
+              setSelectedLogId(null);
+            }}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+              setSelectedLogId(null);
+            }}
+          />
         </>
       )}
 
@@ -484,12 +524,6 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
           </div>
         </dl>
       </section>
-
-      <div className="mt-4">
-        <InfoBanner tone="neutral" icon="lock" title="只读">
-          审计事件不可在这里修改，数据来自服务端 audit_logs。
-        </InfoBanner>
-      </div>
     </Drawer>
   );
 }

@@ -12,6 +12,8 @@ import type {
   CreateKnowledgeBaseRequest,
   CreateKnowledgeBaseResponse,
   CreateModelConfigRequest,
+  CreateSearchConfigRequest,
+  DirectoryResponse,
   DocumentListResponse,
   KnowledgeBaseListResponse,
   MemberListResponse,
@@ -19,8 +21,14 @@ import type {
   ModelConfigListResponse,
   ModelConfigResponse,
   ReparseDocumentResponse,
+  SearchConfigListResponse,
+  SearchConfigResponse,
   SendChatMessageRequest,
   SessionResponse,
+  TestSearchConfigRequest,
+  TestSearchConfigResponse,
+  UpdateDocumentAclModeRequest,
+  UpdateDocumentAclModeResponse,
   UpdateDocumentAclRequest,
   UpdateDocumentAclResponse,
   UpdateKnowledgeBaseAclRequest,
@@ -29,6 +37,7 @@ import type {
   UpdateKnowledgeBaseResponse,
   UpdateMemberRequest,
   UpdateModelConfigRequest,
+  UpdateSearchConfigRequest,
   UploadDocumentResponse,
 } from "@pichat/shared";
 
@@ -119,8 +128,26 @@ export function logout() {
   return apiRequest<void>("/api/auth/logout", { method: "POST" });
 }
 
-export function fetchKnowledgeBases() {
-  return apiRequest<KnowledgeBaseListResponse>("/api/knowledge-bases");
+function queryString(params: Record<string, string | number | boolean | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === "") {
+      continue;
+    }
+    search.set(key, String(value));
+  }
+  return search.size > 0 ? `?${search.toString()}` : "";
+}
+
+export function fetchKnowledgeBases(
+  options: { includeLocked?: boolean; page?: number; pageSize?: number } = {},
+) {
+  const search = queryString({
+    includeLocked: options.includeLocked ? "true" : undefined,
+    page: options.page,
+    pageSize: options.pageSize,
+  });
+  return apiRequest<KnowledgeBaseListResponse>(`/api/knowledge-bases${search}`);
 }
 
 export function createKnowledgeBase(input: CreateKnowledgeBaseRequest) {
@@ -143,9 +170,17 @@ export function deleteKnowledgeBase(knowledgeBaseId: string) {
   });
 }
 
-export function fetchDocuments(knowledgeBaseId: string) {
+export function fetchDocuments(
+  knowledgeBaseId: string,
+  options: { includeLocked?: boolean; page?: number; pageSize?: number } = {},
+) {
+  const search = queryString({
+    includeLocked: options.includeLocked ? "true" : undefined,
+    page: options.page,
+    pageSize: options.pageSize,
+  });
   return apiRequest<DocumentListResponse>(
-    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
+    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents${search}`,
   );
 }
 
@@ -169,6 +204,13 @@ export function updateDocumentAcl(documentId: string, input: UpdateDocumentAclRe
   );
 }
 
+export function updateDocumentAclMode(documentId: string, input: UpdateDocumentAclModeRequest) {
+  return apiRequest<UpdateDocumentAclModeResponse>(
+    `/api/documents/${encodeURIComponent(documentId)}/acl-mode`,
+    { method: "PUT", body: jsonBody(input) },
+  );
+}
+
 export function updateKnowledgeBaseAcl(
   knowledgeBaseId: string,
   input: UpdateKnowledgeBaseAclRequest,
@@ -186,8 +228,13 @@ export function checkDocumentAccess(documentId: string) {
   });
 }
 
-export function fetchMembers() {
-  return apiRequest<MemberListResponse>("/api/members");
+export function fetchMembers(options: { page?: number; pageSize?: number } = {}) {
+  const search = queryString({ page: options.page, pageSize: options.pageSize });
+  return apiRequest<MemberListResponse>(`/api/members${search}`);
+}
+
+export function fetchDirectory() {
+  return apiRequest<DirectoryResponse>("/api/members/directory");
 }
 
 export function updateMember(memberId: string, input: UpdateMemberRequest) {
@@ -206,20 +253,15 @@ export function resetMemberPassword(memberId: string, password: string) {
 
 export function fetchAuditLogs(
   params: {
-    limit?: number;
+    page?: number;
+    pageSize?: number;
     action?: string;
     resourceType?: string;
     result?: string;
     actorId?: string;
   } = {},
 ) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value) {
-      search.set(key, String(value));
-    }
-  }
-  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  const suffix = queryString(params);
   return apiRequest<AuditLogListResponse>(`/api/audit-logs${suffix}`);
 }
 
@@ -248,6 +290,41 @@ export function deleteModelConfig(id: string) {
 export function setDefaultModelConfig(id: string) {
   return apiRequest<ModelConfigResponse>(`/api/model-configs/${encodeURIComponent(id)}/default`, {
     method: "POST",
+  });
+}
+
+export function fetchSearchConfigs() {
+  return apiRequest<SearchConfigListResponse>("/api/search-configs");
+}
+
+export function createSearchConfig(input: CreateSearchConfigRequest) {
+  return apiRequest<SearchConfigResponse>("/api/search-configs", {
+    method: "POST",
+    body: jsonBody(input),
+  });
+}
+
+export function updateSearchConfig(id: string, input: UpdateSearchConfigRequest) {
+  return apiRequest<SearchConfigResponse>(`/api/search-configs/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: jsonBody(input),
+  });
+}
+
+export function deleteSearchConfig(id: string) {
+  return apiRequest<void>(`/api/search-configs/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function setDefaultSearchConfig(id: string) {
+  return apiRequest<SearchConfigResponse>(`/api/search-configs/${encodeURIComponent(id)}/default`, {
+    method: "POST",
+  });
+}
+
+export function testSearchConfig(input: TestSearchConfigRequest) {
+  return apiRequest<TestSearchConfigResponse>("/api/search-configs/test", {
+    method: "POST",
+    body: jsonBody(input),
   });
 }
 

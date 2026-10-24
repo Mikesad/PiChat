@@ -7,27 +7,21 @@ import {
   type AclPermission,
   type AclSubject,
   findDocument,
-  groupMemberCount,
-  groups,
   mergeException,
   removeException,
   roleLabels,
   subjectKey,
-  subjectMemberCount,
-  subjectName,
-  users,
 } from "@/lib/admin-data";
 import { apiErrorMessage, checkDocumentAccess } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
+import { useDirectory } from "./directory";
 import { Drawer } from "./drawer";
 import { useToast } from "./toast";
 import { Badge, Button, InfoBanner, StatusBadge, selectClass } from "./ui";
 import { useApiErrorHandler } from "./use-api-error";
-
-const activeUsers = users.filter((user) => user.status === "active");
 
 function parseSubject(value: string): AclSubject | null {
   const [type, id] = value.split(":");
@@ -46,6 +40,8 @@ export function SubjectSelect({
   onChange: (value: string) => void;
   label: string;
 }) {
+  const { groups, activeMembers, subjectMemberCount } = useDirectory();
+
   return (
     <select
       value={value}
@@ -53,18 +49,18 @@ export function SubjectSelect({
       aria-label={label}
       className={selectClass}
     >
-      <option value="">选择用户或用户组…</option>
-      <optgroup label="用户组">
+      <option value="">选择用户或部门…</option>
+      <optgroup label="部门">
         {groups.map((group) => (
           <option key={group.id} value={`group:${group.id}`}>
-            {group.name} · {groupMemberCount(group.id)} 人
+            {group.name} · {subjectMemberCount({ type: "group", id: group.id })} 人
           </option>
         ))}
       </optgroup>
       <optgroup label="用户">
-        {activeUsers.map((user) => (
-          <option key={user.id} value={`user:${user.id}`}>
-            {user.name} · {roleLabels[user.role]}
+        {activeMembers.map((member) => (
+          <option key={member.id} value={`user:${member.id}`}>
+            {member.displayName} · {roleLabels[member.role]}
           </option>
         ))}
       </optgroup>
@@ -117,13 +113,22 @@ export function DocumentAclDrawer({
   documentId: string;
   onClose: () => void;
 }) {
-  const { knowledgeBases, setDocumentExceptions } = useAdminData();
+  const { knowledgeBases, setDocumentAclMode, setDocumentExceptions } = useAdminData();
+  const {
+    subjectName,
+    subjectMemberCount,
+    status: directoryStatus,
+    error: directoryError,
+  } = useDirectory();
   const { user } = useAuth();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
   const found = findDocument(knowledgeBases, documentId);
   const [exceptions, setExceptions] = useState<AclException[]>(
     () => found?.document.exceptions ?? [],
+  );
+  const [mode, setMode] = useState<"inherit" | "restricted">(
+    () => found?.document.aclMode ?? "inherit",
   );
   const [subjectValue, setSubjectValue] = useState("");
   const [permission, setPermission] = useState<AclPermission>("read");
@@ -163,11 +168,19 @@ export function DocumentAclDrawer({
 
   const { knowledgeBase, document } = found;
   const diff = diffExceptions(document.exceptions, exceptions);
-  const dirty = diff.total > 0;
+  const modeChanged = mode !== (document.aclMode ?? "inherit");
+  const dirty = diff.total > 0 || modeChanged;
   const draftDenyCount = exceptions.filter((exception) => exception.permission === "deny").length;
+  const draftReadCount = exceptions.filter((exception) => exception.permission === "read").length;
+  const restrictedWithoutRead = mode === "restricted" && draftReadCount === 0;
   const pendingSubject = parseSubject(subjectValue);
   const subjectInDefault = pendingSubject
     ? knowledgeBase.defaultSubjects.some(
+        (subject) => subjectKey(subject) === subjectKey(pendingSubject),
+      )
+    : false;
+  const subjectDeniedByDefault = pendingSubject
+    ? knowledgeBase.deniedSubjects.some(
         (subject) => subjectKey(subject) === subjectKey(pendingSubject),
       )
     : false;
@@ -182,7 +195,11 @@ export function DocumentAclDrawer({
 
   function handleAdd() {
     if (!pendingSubject) {
-      setError("请选择用户或用户组");
+      setError("请选择用户或部门");
+      return;
+    }
+    if (subjectDeniedByDefault && permission === "read") {
+      setError("该主体已被知识库默认禁止，文档读取例外无法覆盖，请先在知识库访问范围中移除禁止");
       return;
     }
     setExceptions((previous) => mergeException(previous, { ...pendingSubject, permission }));
@@ -193,7 +210,12 @@ export function DocumentAclDrawer({
   async function handleSave() {
     setSaving(true);
     try {
-      await setDocumentExceptions(knowledgeBase.id, document.id, exceptions);
+      if (modeChanged) {
+        await setDocumentAclMode(document.id, mode);
+      }
+      if (diff.total > 0) {
+        await setDocumentExceptions(knowledgeBase.id, document.id, exceptions);
+      }
       showToast("权限已更新，下一次提问生效");
       onClose();
     } catch (cause) {
@@ -213,16 +235,23 @@ export function DocumentAclDrawer({
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-subtle">
-            {diff.total > 0
-              ? `将新增 ${diff.added} 项、移除 ${diff.removed} 项、修改 ${diff.changed} 项`
+            {dirty
+              ? [
+                  modeChanged ? "权限模式变更 1 项" : null,
+                  diff.total > 0
+                    ? `例外新增 ${diff.added} 项、移除 ${diff.removed} 项、修改 ${diff.changed} 项`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
               : "没有未保存的更改"}
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={requestClose}>
               取消
             </Button>
-            <Button onClick={handleSave} disabled={diff.total === 0 || saving}>
-              {saving ? "保存中…" : `保存${diff.total > 0 ? ` ${diff.total} 项更改` : ""}`}
+            <Button onClick={handleSave} disabled={!dirty || saving}>
+              {saving ? "保存中…" : "保存"}
             </Button>
           </div>
         </div>
@@ -256,35 +285,105 @@ export function DocumentAclDrawer({
         </p>
       </div>
 
-      <div className="mt-3">
-        <InfoBanner tone="accent" icon="shield-check" title="固定规则">
-          知识库默认范围对全部文档生效，文档例外叠加在其上；任何拒绝规则都会覆盖读取权限。
-        </InfoBanner>
-      </div>
+      <section className="mt-5">
+        <h3 className="text-xs font-medium text-fg">文档权限模式</h3>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setMode("inherit")}
+            className={cn(
+              "rounded-xl border p-3 text-left transition",
+              mode === "inherit"
+                ? "border-accent bg-accent-soft/50"
+                : "border-border bg-surface hover:border-accent/50",
+            )}
+          >
+            <p className="text-sm font-medium text-fg">继承知识库权限</p>
+            <p className="mt-1 text-[11px] leading-5 text-subtle">
+              先通过知识库所属部门的访问校验；文档例外可继续拒绝特定主体。
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("restricted")}
+            className={cn(
+              "rounded-xl border p-3 text-left transition",
+              mode === "restricted"
+                ? "border-accent bg-accent-soft/50"
+                : "border-border bg-surface hover:border-accent/50",
+            )}
+          >
+            <p className="text-sm font-medium text-fg">独立授权</p>
+            <p className="mt-1 text-[11px] leading-5 text-subtle">
+              仍需通过知识库访问校验；还必须在此文档显式授予读取，知识库默认读取不再自动生效。
+            </p>
+          </button>
+        </div>
+        {restrictedWithoutRead ? (
+          <div className="mt-2">
+            <InfoBanner tone="warning" icon="alert-circle" title="独立授权文档没有读取例外">
+              保存后除租户管理员外，任何人都无法读取该文档。请至少添加一个读取主体。
+            </InfoBanner>
+          </div>
+        ) : null}
+        <p className="mt-2 text-[11px] leading-5 text-subtle">
+          文档 ACL
+          不能绕过知识库访问资格：未获得该知识库授权的部门或用户，即使在这里添加读取也不会生效。
+        </p>
+      </section>
+
+      {directoryStatus === "error" ? (
+        <div className="mt-3">
+          <InfoBanner tone="warning" icon="alert-circle" title="成员目录加载失败">
+            {directoryError ?? "主体名称与人数可能不准确，请刷新后重试。"}
+          </InfoBanner>
+        </div>
+      ) : null}
 
       <section className="mt-5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-medium text-fg">继承自知识库默认</h3>
-          <Badge tone="outline">{knowledgeBase.defaultSubjects.length}</Badge>
+          <h3 className="text-xs font-medium text-fg">知识库访问范围</h3>
+          <Badge tone="outline">
+            {knowledgeBase.defaultSubjects.length + knowledgeBase.deniedSubjects.length}
+          </Badge>
         </div>
         <p className="mt-1 text-[11px] text-subtle">
-          默认范围在知识库的「访问范围」中调整，这里不能单独移除。
+          {mode === "restricted"
+            ? "独立授权模式下，知识库允许只作为访问前提；还需在文档例外中显式授予读取。"
+            : "继承模式下，知识库允许即代表可读；知识库禁止仍然优先。"}
         </p>
-        {knowledgeBase.defaultSubjects.length === 0 ? (
+        {knowledgeBase.defaultSubjects.length === 0 && knowledgeBase.deniedSubjects.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-warning/40 bg-warning-soft px-3 py-2 text-xs leading-5 text-warning">
             该知识库没有默认访问范围，普通成员只有在文档例外中才会获得读取权限。
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
-            {knowledgeBase.defaultSubjects.map((subject) => (
+            {[
+              ...knowledgeBase.defaultSubjects.map((subject) => ({
+                subject,
+                permission: "read" as const,
+              })),
+              ...knowledgeBase.deniedSubjects.map((subject) => ({
+                subject,
+                permission: "deny" as const,
+              })),
+            ].map(({ subject, permission: defaultPermission }) => (
               <li
-                key={subjectKey(subject)}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2"
+                key={`${subject.type}:${subject.id}`}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border px-3 py-2",
+                  defaultPermission === "deny"
+                    ? "border-danger/30 bg-danger-soft/60"
+                    : "border-border bg-surface",
+                )}
               >
                 <Icon
                   name={subject.type === "group" ? "users" : "user"}
                   size={14}
-                  className="shrink-0 text-subtle"
+                  className={cn(
+                    "shrink-0",
+                    defaultPermission === "deny" ? "text-danger" : "text-subtle",
+                  )}
                 />
                 <span className="min-w-0 flex-1 truncate text-sm text-fg">
                   {subjectName(subject)}
@@ -292,7 +391,9 @@ export function DocumentAclDrawer({
                 <span className="shrink-0 text-[11px] text-subtle">
                   {subjectMemberCount(subject)} 人
                 </span>
-                <Badge tone="neutral">继承</Badge>
+                <Badge tone={defaultPermission === "deny" ? "danger" : "neutral"}>
+                  {defaultPermission === "deny" ? "禁止 · 继承" : "允许 · 继承"}
+                </Badge>
               </li>
             ))}
           </ul>
@@ -306,12 +407,17 @@ export function DocumentAclDrawer({
         </div>
         {exceptions.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-subtle">
-            暂无文档例外。文档当前只继承知识库默认范围。
+            {mode === "restricted"
+              ? "暂无文档例外。独立授权文档只有租户管理员可以读取。"
+              : "暂无文档例外。文档当前只继承知识库访问范围。"}
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
             {exceptions.map((exception) => {
-              const inherited = knowledgeBase.defaultSubjects.some(
+              const inheritedRead = knowledgeBase.defaultSubjects.some(
+                (subject) => subjectKey(subject) === subjectKey(exception),
+              );
+              const inheritedDeny = knowledgeBase.deniedSubjects.some(
                 (subject) => subjectKey(subject) === subjectKey(exception),
               );
               return (
@@ -341,11 +447,17 @@ export function DocumentAclDrawer({
                   <Badge tone={exception.permission === "deny" ? "danger" : "success"}>
                     {exception.permission === "deny" ? "拒绝" : "读取"}
                   </Badge>
-                  {inherited && exception.permission === "deny" ? (
-                    <Badge tone="danger">覆盖默认</Badge>
+                  {inheritedRead && exception.permission === "deny" ? (
+                    <Badge tone="danger">覆盖默认允许</Badge>
                   ) : null}
-                  {inherited && exception.permission === "read" ? (
+                  {inheritedRead && exception.permission === "read" ? (
                     <Badge tone="warning">与默认重复</Badge>
+                  ) : null}
+                  {inheritedDeny && exception.permission === "deny" ? (
+                    <Badge tone="warning">与默认重复</Badge>
+                  ) : null}
+                  {inheritedDeny && exception.permission === "read" ? (
+                    <Badge tone="danger">无效：知识库禁止</Badge>
                   ) : null}
                   <button
                     type="button"
@@ -372,7 +484,7 @@ export function DocumentAclDrawer({
                 setSubjectValue(value);
                 setError(null);
               }}
-              label="选择要添加的用户或用户组"
+              label="选择要添加的用户或部门"
             />
             <PermissionSelect value={permission} onChange={setPermission} label="选择权限" />
             <Button onClick={handleAdd} className="justify-center">
@@ -386,9 +498,14 @@ export function DocumentAclDrawer({
               该主体已通过知识库默认获得读取权限，这条例外不会扩大范围。
             </p>
           ) : null}
+          {pendingSubject && subjectDeniedByDefault ? (
+            <p className="mt-1 text-[11px] leading-5 text-danger">
+              该主体已被知识库默认禁止；文档读取例外无法覆盖，拒绝例外只会重复生效。
+            </p>
+          ) : null}
           {pendingSubject && subjectMemberCount(pendingSubject) === 0 && permission === "deny" ? (
             <p className="mt-1 text-[11px] leading-5 text-warning">
-              该用户组当前没有成员，拒绝规则暂时不会影响任何人。
+              该部门当前没有成员，拒绝规则暂时不会影响任何人。
             </p>
           ) : null}
           <p className="mt-1 text-[11px] leading-5 text-subtle">
@@ -478,6 +595,7 @@ export function BulkAclDrawer({
   onApplied?: () => void;
 }) {
   const { knowledgeBases, setBatchDocumentExceptions } = useAdminData();
+  const { subjectName, subjectMemberCount } = useDirectory();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
   const targets = documentIds.flatMap((documentId) => {
@@ -508,7 +626,7 @@ export function BulkAclDrawer({
 
   function handleAdd() {
     if (!pendingSubject) {
-      setError("请选择用户或用户组");
+      setError("请选择用户或部门");
       return;
     }
     setExceptions((previous) => mergeException(previous, { ...pendingSubject, permission }));
@@ -652,7 +770,7 @@ export function BulkAclDrawer({
                 setSubjectValue(value);
                 setError(null);
               }}
-              label="选择要批量授权的用户或用户组"
+              label="选择要批量授权的用户或部门"
             />
             <PermissionSelect value={permission} onChange={setPermission} label="选择批量权限" />
             <Button onClick={handleAdd} className="justify-center">

@@ -65,7 +65,7 @@
   - `canRead(documentId, principal)`
   - `effectiveReaderCount(documentId)`
   - `accessCheck(documentId, principal)`
-  - 用户组展开
+  - 部门展开
   - 进程内缓存 key 包含 `tenantId + knowledgeBaseId + aclVersion + userId + 排序后的 groupIds`
   - ACL 变更递增 `acl_version` 后立即失效
 - 所有查询显式带 `tenantId`。

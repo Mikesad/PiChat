@@ -9,6 +9,7 @@ import { InternalModule } from "./modules/internal/internal.module";
 import { KnowledgeBasesModule } from "./modules/knowledge-bases/knowledge-bases.module";
 import { MembersModule } from "./modules/members/members.module";
 import { ModelConfigsModule } from "./modules/model-configs/model-configs.module";
+import { SearchConfigsModule } from "./modules/search-configs/search-configs.module";
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ModelConfigsModule } from "./modules/model-configs/model-configs.module
     AuthModule,
     KnowledgeBasesModule,
     ModelConfigsModule,
+    SearchConfigsModule,
     ChatModule,
     InternalModule,
     MembersModule,

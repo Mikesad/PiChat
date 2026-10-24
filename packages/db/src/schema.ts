@@ -39,12 +39,16 @@ export const users = mysqlTable(
       .default("member")
       .notNull(),
     status: mysqlEnum("status", ["active", "disabled"]).default("active").notNull(),
+    departmentId: varchar("department_id", { length: 36 }).references(() => departments.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => [
     uniqueIndex("users_tenant_email_uq").on(table.tenantId, table.email),
     index("users_tenant_idx").on(table.tenantId),
+    index("users_department_idx").on(table.departmentId),
   ],
 );
 
@@ -70,8 +74,8 @@ export const authSessions = mysqlTable(
   ],
 );
 
-export const groups = mysqlTable(
-  "groups",
+export const departments = mysqlTable(
+  "departments",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     tenantId: varchar("tenant_id", { length: 36 })
@@ -82,26 +86,8 @@ export const groups = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("groups_tenant_name_uq").on(table.tenantId, table.name),
-    index("groups_tenant_idx").on(table.tenantId),
-  ],
-);
-
-export const groupMembers = mysqlTable(
-  "group_members",
-  {
-    id: varchar("id", { length: 36 }).primaryKey(),
-    groupId: varchar("group_id", { length: 36 })
-      .notNull()
-      .references(() => groups.id, { onDelete: "cascade" }),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("group_members_uq").on(table.groupId, table.userId),
-    index("group_members_user_idx").on(table.userId),
+    uniqueIndex("departments_tenant_name_uq").on(table.tenantId, table.name),
+    index("departments_tenant_idx").on(table.tenantId),
   ],
 );
 
@@ -116,6 +102,15 @@ export const knowledgeBases = mysqlTable(
     description: text("description"),
     ragflowDatasetId: varchar("ragflow_dataset_id", { length: 64 }).notNull(),
     embeddingModel: varchar("embedding_model", { length: 120 }).notNull(),
+    ownerId: varchar("owner_id", { length: 36 }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ownerDepartmentId: varchar("owner_department_id", { length: 36 }).references(
+      () => departments.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     retrievalTopK: int("retrieval_top_k").default(6).notNull(),
     retrievalSimilarityThreshold: double("retrieval_similarity_threshold").default(0.2).notNull(),
     retrievalVectorWeight: double("retrieval_vector_weight").default(0.3).notNull(),
@@ -127,6 +122,8 @@ export const knowledgeBases = mysqlTable(
   (table) => [
     uniqueIndex("knowledge_bases_tenant_name_uq").on(table.tenantId, table.name),
     index("knowledge_bases_tenant_idx").on(table.tenantId),
+    index("knowledge_bases_owner_idx").on(table.ownerId),
+    index("knowledge_bases_owner_department_idx").on(table.ownerDepartmentId),
   ],
 );
 
@@ -146,6 +143,7 @@ export const documents = mysqlTable(
     status: mysqlEnum("status", ["pending", "parsing", "ready", "failed", "deleted"])
       .default("pending")
       .notNull(),
+    aclMode: mysqlEnum("acl_mode", ["inherit", "restricted"]).default("inherit").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number", unsigned: true }),
     mimeType: varchar("mime_type", { length: 120 }),
     errorMessage: varchar("error_message", { length: 512 }),
@@ -280,6 +278,7 @@ export const modelConfigs = mysqlTable(
     userId: varchar("user_id", { length: 36 })
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 20 }).default("chat").notNull(),
     provider: varchar("provider", { length: 60 }).notNull(),
     modelId: varchar("model_id", { length: 120 }).notNull(),
     displayName: varchar("display_name", { length: 120 }).notNull(),
@@ -294,6 +293,7 @@ export const modelConfigs = mysqlTable(
     uniqueIndex("model_configs_tenant_user_model_uq").on(
       table.tenantId,
       table.userId,
+      table.kind,
       table.provider,
       table.modelId,
     ),
@@ -301,10 +301,36 @@ export const modelConfigs = mysqlTable(
   ],
 );
 
+export const searchConfigs = mysqlTable(
+  "search_configs",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: varchar("tenant_id", { length: 36 })
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 40 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    remark: varchar("remark", { length: 500 }),
+    encryptedApiKey: text("encrypted_api_key"),
+    proxy: varchar("proxy", { length: 512 }),
+    enabled: boolean("enabled").default(true).notNull(),
+    isDefault: boolean("is_default").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("search_configs_user_idx").on(table.tenantId, table.userId),
+    index("search_configs_default_idx").on(table.tenantId, table.userId, table.isDefault),
+  ],
+);
+
 export type Tenant = typeof tenants.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type AuthSession = typeof authSessions.$inferSelect;
-export type Group = typeof groups.$inferSelect;
+export type Department = typeof departments.$inferSelect;
 export type KnowledgeBase = typeof knowledgeBases.$inferSelect;
 export type KnowledgeBaseAcl = typeof knowledgeBaseAcls.$inferSelect;
 export type Document = typeof documents.$inferSelect;
@@ -313,3 +339,4 @@ export type AgentSession = typeof agentSessions.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type ModelConfig = typeof modelConfigs.$inferSelect;
+export type SearchConfig = typeof searchConfigs.$inferSelect;

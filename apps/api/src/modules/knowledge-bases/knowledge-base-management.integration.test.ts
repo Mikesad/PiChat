@@ -8,6 +8,7 @@ import {
   auditLogs,
   createDatabase,
   type Database,
+  departments,
   documentAcls,
   documents,
   knowledgeBaseAcls,
@@ -21,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serviceUnavailable } from "../../common/api-error";
 import { AccessControlService } from "../access-control/access-control.service";
 import type { IngestionQueueService } from "../ingestion/ingestion-queue.service";
+import type { ModelConfigsService } from "../model-configs/model-configs.service";
 import type { KnowledgeBaseRemoteService } from "./knowledge-base-remote.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
@@ -81,7 +83,7 @@ describeWithDatabase("knowledge base management", () => {
     email: "kb-admin@test.local",
     displayName: "KB Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const member: SessionUser = {
     id: memberId,
@@ -89,7 +91,7 @@ describeWithDatabase("knowledge base management", () => {
     email: "kb-member@test.local",
     displayName: "KB Member",
     role: "member",
-    groupIds: [groupId],
+    departmentId: groupId,
   };
   const foreignAdmin: SessionUser = {
     id: foreignAdminId,
@@ -97,7 +99,7 @@ describeWithDatabase("knowledge base management", () => {
     email: "foreign-admin@test.local",
     displayName: "Foreign Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
 
   let db: Database;
@@ -132,11 +134,28 @@ describeWithDatabase("knowledge base management", () => {
       remote as unknown as KnowledgeBaseRemoteService,
       queue as unknown as IngestionQueueService,
       config,
+      {
+        resolveOptionalForKind: async (_principal: unknown, _kind: string, id?: string) =>
+          id
+            ? {
+                id,
+                provider: "siliconflow",
+                modelId: "BAAI/bge-m3@SILICONFLOW",
+                displayName: "BGE-M3",
+                baseUrl: "https://api.siliconflow.cn/v1",
+                apiKey: "test",
+              }
+            : null,
+      } as unknown as ModelConfigsService,
     );
 
     await db.insert(tenants).values([
       { id: tenantId, name: "KB Management", slug: tenantId },
       { id: otherTenantId, name: "KB Management Other", slug: otherTenantId },
+    ]);
+    await db.insert(departments).values([
+      { id: groupId, tenantId, name: "KB Department" },
+      { id: outsideGroupId, tenantId, name: "KB Outside Department" },
     ]);
     await db.insert(users).values([
       {
@@ -154,6 +173,7 @@ describeWithDatabase("knowledge base management", () => {
         passwordHash: "scrypt$00$00",
         displayName: member.displayName,
         role: "member",
+        departmentId: groupId,
       },
       {
         id: foreignAdminId,
@@ -228,6 +248,7 @@ describeWithDatabase("knowledge base management", () => {
     expect(result.ragflowDatasetId).toMatch(/^rf-/);
     expect(result.embeddingModel).toBe("bge-m3");
     expect(result.aclVersion).toBe(1);
+    expect(result.ownerId).toBe(adminId);
     expect(remote.createCalls.at(-1)?.embeddingModel).toBe("bge-m3");
 
     const row = await db
@@ -248,6 +269,16 @@ describeWithDatabase("knowledge base management", () => {
         ),
       );
     expect(audit).toHaveLength(1);
+  });
+
+  it("uses the selected embedding model configuration when creating a dataset", async () => {
+    const result = await service.create(admin, {
+      name: `Embedding 配置-${randomUUID().slice(0, 8)}`,
+      embeddingConfigId: "embedding-config-1",
+    });
+
+    expect(result.embeddingModel).toBe("BAAI/bge-m3@SILICONFLOW");
+    expect(remote.createCalls.at(-1)?.embeddingModel).toBe("BAAI/bge-m3@SILICONFLOW");
   });
 
   it("rejects duplicate names, members, and RAGFlow failures without writing a half-created row", async () => {
@@ -334,7 +365,7 @@ describeWithDatabase("knowledge base management", () => {
     expect(queue.cancelled).toEqual(expect.arrayContaining([firstDocument, secondDocument]));
     expect(remote.deletedDatasets).toContain("ds-delete");
 
-    const listed = await service.list(admin);
+    const { knowledgeBases: listed } = await service.list(admin);
     expect(listed.map((item) => item.id)).not.toContain(knowledgeBaseId);
     await expect(service.get(knowledgeBaseId, admin)).rejects.toMatchObject({
       code: "not_found",
@@ -344,7 +375,7 @@ describeWithDatabase("knowledge base management", () => {
     });
     expect(
       await accessControl.listReadableDocumentIds(
-        { tenantId, userId: memberId, role: "member", groupIds: [groupId] },
+        { tenantId, userId: memberId, role: "member", departmentId: groupId },
         knowledgeBaseId,
       ),
     ).toEqual(new Set());
@@ -473,7 +504,7 @@ describeWithDatabase("knowledge base management", () => {
       tenantId,
       userId: memberId,
       role: "member" as const,
-      groupIds: [groupId],
+      departmentId: groupId,
     };
     await accessControl.listReadableDocumentIds(principal, knowledgeBaseId);
     const member = await db
@@ -595,5 +626,125 @@ describeWithDatabase("knowledge base management", () => {
     await expect(
       service.updateDocumentsAcl(admin, foreignKnowledgeBaseId, [foreignDocumentId], []),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("enforces knowledge base access before document mode and document ACL", async () => {
+    const knowledgeBaseId = await createKnowledgeBase({
+      name: `严格门禁-${randomUUID().slice(0, 8)}`,
+      aclVersion: 1,
+    });
+    await db.insert(knowledgeBaseAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      subjectType: "group",
+      subjectId: groupId,
+      permission: "read",
+    });
+    const inherited = await createDocument(knowledgeBaseId, "inherit.txt");
+    const restricted = await createDocument(knowledgeBaseId, "restricted.txt", {
+      aclMode: "restricted",
+    });
+    await db.insert(documentAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      documentId: restricted,
+      subjectType: "group",
+      subjectId: groupId,
+      permission: "read",
+    });
+
+    const memberPrincipal = {
+      tenantId,
+      userId: memberId,
+      role: "member" as const,
+      departmentId: groupId,
+    };
+    const outsiderPrincipal = {
+      tenantId,
+      userId: memberId,
+      role: "member" as const,
+      departmentId: outsideGroupId,
+    };
+
+    expect(
+      [...(await accessControl.listReadableDocumentIds(memberPrincipal, knowledgeBaseId))].sort(),
+    ).toEqual([inherited, restricted].sort());
+    expect(await accessControl.listReadableDocumentIds(outsiderPrincipal, knowledgeBaseId)).toEqual(
+      new Set(),
+    );
+
+    await db.insert(documentAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      documentId: restricted,
+      subjectType: "group",
+      subjectId: outsideGroupId,
+      permission: "read",
+    });
+    expect(await accessControl.listReadableDocumentIds(outsiderPrincipal, knowledgeBaseId)).toEqual(
+      new Set(),
+    );
+  });
+
+  it("switches a document to restricted mode and records an audit entry", async () => {
+    const knowledgeBaseId = await createKnowledgeBase({
+      name: `模式切换-${randomUUID().slice(0, 8)}`,
+      aclVersion: 2,
+    });
+    await db.insert(knowledgeBaseAcls).values({
+      id: randomUUID(),
+      tenantId,
+      knowledgeBaseId,
+      subjectType: "group",
+      subjectId: groupId,
+      permission: "read",
+    });
+    const documentId = await createDocument(knowledgeBaseId, "mode.txt");
+    const memberPrincipal = {
+      tenantId,
+      userId: memberId,
+      role: "member" as const,
+      departmentId: groupId,
+    };
+
+    expect(await accessControl.listReadableDocumentIds(memberPrincipal, knowledgeBaseId)).toEqual(
+      new Set([documentId]),
+    );
+
+    const result = await service.updateDocumentAclMode(admin, documentId, "restricted");
+    expect(result.aclVersion).toBe(3);
+    expect(result.document.aclMode).toBe("restricted");
+    expect(await accessControl.listReadableDocumentIds(memberPrincipal, knowledgeBaseId)).toEqual(
+      new Set(),
+    );
+
+    await service.updateDocumentsAcl(
+      admin,
+      knowledgeBaseId,
+      [documentId],
+      [{ type: "group", id: groupId, permission: "read" }],
+    );
+    expect(await accessControl.listReadableDocumentIds(memberPrincipal, knowledgeBaseId)).toEqual(
+      new Set([documentId]),
+    );
+
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.action, "document.acl_mode.update"),
+          eq(auditLogs.resourceId, documentId),
+        ),
+      );
+    expect(audit[0]?.metadata).toMatchObject({
+      before: { aclMode: "inherit" },
+      after: { aclMode: "restricted" },
+      aclVersion: 3,
+    });
   });
 });

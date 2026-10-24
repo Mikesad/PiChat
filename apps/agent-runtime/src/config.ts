@@ -15,6 +15,8 @@ export interface RuntimeConfig {
     topK: number;
     maxTopK: number;
     similarityThreshold: number;
+    answerSimilarityThreshold: number;
+    highSimilarityThreshold: number;
     vectorWeight: number;
     maxSnippetChars: number;
     maxResultChars: number;
@@ -22,6 +24,11 @@ export interface RuntimeConfig {
   model: {
     contextWindow: number;
     maxTokens: number;
+  };
+  webSearch: {
+    provider: "bocha" | "tavily";
+    apiKey: string;
+    maxResults: number;
   };
 }
 
@@ -39,6 +46,15 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     throw new Error("INTERNAL_SHARED_SECRET is not configured");
   }
 
+  const providerName = (env.WEB_SEARCH_PROVIDER?.trim().toLowerCase() || "bocha") as
+    | "bocha"
+    | "tavily";
+  if (providerName !== "bocha" && providerName !== "tavily") {
+    throw new Error("WEB_SEARCH_PROVIDER must be bocha or tavily");
+  }
+  const providerApiKey =
+    providerName === "bocha" ? env.BOCHA_API_KEY?.trim() : env.TAVILY_API_KEY?.trim();
+
   return {
     port: numberFromEnv(env.AGENT_RUNTIME_PORT, 3002),
     internalSecret,
@@ -54,6 +70,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       topK: numberFromEnv(env.KB_SEARCH_TOP_K, 6),
       maxTopK: numberFromEnv(env.KB_SEARCH_MAX_TOP_K, 12),
       similarityThreshold: Number(env.KB_SEARCH_SIMILARITY_THRESHOLD ?? "0.2"),
+      answerSimilarityThreshold: Number(env.KB_SEARCH_ANSWER_SIMILARITY_THRESHOLD ?? "0.35"),
+      highSimilarityThreshold: Number(env.KB_SEARCH_HIGH_SIMILARITY_THRESHOLD ?? "0.6"),
       vectorWeight: Number(env.KB_SEARCH_VECTOR_WEIGHT ?? "0.3"),
       maxSnippetChars: numberFromEnv(env.KB_SEARCH_MAX_SNIPPET_CHARS, 1_200),
       maxResultChars: numberFromEnv(env.KB_SEARCH_MAX_RESULT_CHARS, 12_000),
@@ -61,6 +79,14 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     model: {
       contextWindow: numberFromEnv(env.AGENT_MODEL_CONTEXT_WINDOW, 128_000),
       maxTokens: numberFromEnv(env.AGENT_MODEL_MAX_TOKENS, 8_192),
+    },
+    webSearch: {
+      provider: providerName,
+      apiKey: env.WEB_SEARCH_API_KEY?.trim() || providerApiKey || "",
+      maxResults: Math.min(
+        10,
+        Math.max(1, Math.floor(numberFromEnv(env.WEB_SEARCH_MAX_RESULTS, 5))),
+      ),
     },
   };
 }

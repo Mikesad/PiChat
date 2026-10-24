@@ -36,6 +36,8 @@ const sendMessageSchema = z.object({
   modelConfigId: z.string().min(1).max(64).optional(),
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
   retry: z.boolean().optional(),
+  webSearch: z.boolean().optional(),
+  knowledgeBaseIds: z.array(z.string().trim().min(1).max(64)).max(50).optional(),
 });
 
 @Controller("chat")

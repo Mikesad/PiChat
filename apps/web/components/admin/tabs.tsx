@@ -2,11 +2,14 @@
 
 import { type KeyboardEvent, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { Icon, type IconName } from "../icons";
 
 interface TabItem<T extends string> {
   id: T;
   label: string;
   count?: number;
+  icon?: IconName;
+  statusLabel?: string;
 }
 
 export function Tabs<T extends string>({
@@ -69,6 +72,7 @@ export function Tabs<T extends string>({
                 : "border-transparent text-muted hover:border-border-strong hover:text-fg",
             )}
           >
+            {item.icon ? <Icon name={item.icon} size={14} className="shrink-0" /> : null}
             {item.label}
             {item.count !== undefined ? (
               <span
@@ -78,6 +82,12 @@ export function Tabs<T extends string>({
                 )}
               >
                 {item.count}
+              </span>
+            ) : null}
+            {item.statusLabel ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-subtle">
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-subtle" />
+                {item.statusLabel}
               </span>
             ) : null}
           </button>

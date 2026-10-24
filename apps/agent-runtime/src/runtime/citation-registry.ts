@@ -64,6 +64,10 @@ export class CitationRegistry {
     return this.byIndex.get(index);
   }
 
+  find(documentId: string, chunkId: string): ChatCitation | undefined {
+    return this.byKey.get(`${documentId}:${chunkId}`)?.citation;
+  }
+
   all(): ChatCitation[] {
     return [...this.byIndex.values()]
       .sort((left, right) => left.citation.index - right.citation.index)

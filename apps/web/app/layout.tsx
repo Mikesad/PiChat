@@ -5,6 +5,7 @@ import { ToastProvider } from "@/components/admin/toast";
 import { AuthGate } from "@/components/auth/auth-gate";
 import { AuthProvider } from "@/components/auth/auth-provider";
 import { ModelConfigProvider } from "@/components/model-config/model-config-provider";
+import { ThemeFavicon } from "@/components/theme-favicon";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,7 +22,7 @@ export const viewport: Viewport = {
   ],
 };
 
-const themeScript = `try{var stored=localStorage.getItem("pichat-theme");var dark=stored?stored==="dark":window.matchMedia("(prefers-color-scheme: dark)").matches;var root=document.documentElement;root.classList.toggle("dark",dark);root.style.colorScheme=dark?"dark":"light";}catch(error){}`;
+const themeScript = `try{var stored=localStorage.getItem("pichat-theme");var theme=stored==="light"||stored==="dark"||stored==="pi"?stored:window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";var root=document.documentElement;root.classList.toggle("dark",theme==="dark");root.classList.toggle("pi",theme==="pi");root.style.colorScheme=theme==="dark"?"dark":"light";}catch(error){}`;
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <Script id="pichat-theme" strategy="beforeInteractive">
           {themeScript}
         </Script>
+        <ThemeFavicon />
         <ToastProvider>
           <AuthProvider>
             <ModelConfigProvider>

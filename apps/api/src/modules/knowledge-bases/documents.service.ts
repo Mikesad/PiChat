@@ -40,7 +40,7 @@ function toAccessPrincipal(user: SessionUser): AccessPrincipal {
     tenantId: user.tenantId,
     userId: user.id,
     role: user.role,
-    groupIds: user.groupIds,
+    departmentId: user.departmentId,
   };
 }
 
@@ -530,6 +530,9 @@ export class DocumentsService {
       document.id,
       principal.tenantId,
     );
+    const decision = await this.accessControl.canRead(document.id, toAccessPrincipal(principal));
+    const canRead = decision?.allowed ?? false;
+    const canManage = canManageDocuments(principal.role);
 
     return {
       id: document.id,
@@ -538,20 +541,25 @@ export class DocumentsService {
       status: document.status,
       sourceKey: document.sourceKey,
       ragflowDocumentId: document.ragflowDocumentId,
+      aclMode: document.aclMode,
       sizeLabel: formatSizeLabel(document.sizeBytes),
       mimeType: document.mimeType,
       errorMessage: document.errorMessage,
-      exceptions: exceptionRows
-        .map((row) => ({
-          type: row.subjectType,
-          id: row.subjectId,
-          permission: row.permission,
-        }))
-        .sort((left, right) =>
-          `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`),
-        ),
+      exceptions:
+        canManage || canRead
+          ? exceptionRows
+              .map((row) => ({
+                type: row.subjectType,
+                id: row.subjectId,
+                permission: row.permission,
+              }))
+              .sort((left, right) =>
+                `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`),
+              )
+          : [],
       effectiveReaderCount,
-      canManageAcl: canManageDocuments(principal.role),
+      canRead,
+      canManageAcl: canManage,
       createdAt: document.createdAt.toISOString(),
       updatedAt: document.updatedAt.toISOString(),
     };

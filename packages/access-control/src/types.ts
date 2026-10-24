@@ -2,6 +2,8 @@ export type SubjectType = "user" | "group";
 
 export type AclPermission = "read" | "deny";
 
+export type DocumentAclMode = "inherit" | "restricted";
+
 export interface AclEntry {
   tenantId?: string;
   documentId: string;
@@ -22,12 +24,13 @@ export interface KnowledgeBaseAclEntry {
 export interface DocumentRef {
   id: string;
   knowledgeBaseId: string;
+  aclMode: DocumentAclMode;
 }
 
 export interface AccessPrincipal {
   tenantId: string;
   userId: string;
-  groupIds: string[];
+  departmentId: string | null;
   role: string;
 }
 

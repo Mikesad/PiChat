@@ -29,10 +29,12 @@ import { and, asc, desc, eq, lt } from "drizzle-orm";
 import type { FastifyReply } from "fastify";
 import { conflict, notFound, serviceUnavailable } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
+import { AccessControlService } from "../access-control/access-control.service";
 import {
   ModelConfigsService,
   type ResolvedModelConfig,
 } from "../model-configs/model-configs.service";
+import { SearchConfigsService } from "../search-configs/search-configs.service";
 import { ChatRuntimeClient } from "./chat-runtime.client";
 
 const maxHistoryMessages = 20;
@@ -68,7 +70,9 @@ export class ChatService {
 
   constructor(
     @Inject(DATABASE) private readonly db: Database,
+    @Inject(AccessControlService) private readonly accessControl: AccessControlService,
     @Inject(ModelConfigsService) private readonly modelConfigsService: ModelConfigsService,
+    @Inject(SearchConfigsService) private readonly searchConfigsService: SearchConfigsService,
     @Inject(ChatRuntimeClient) private readonly runtimeClient: ChatRuntimeClient,
   ) {}
 
@@ -133,22 +137,61 @@ export class ChatService {
       .orderBy(asc(messages.createdAt))
       .limit(500);
 
-    return {
-      session: this.toSessionSummary(session),
-      messages: rows.flatMap((row) => {
-        if (row.role !== "user" && row.role !== "assistant") {
+    const citationDecisions = new Map<string, boolean>();
+    const messageSummaries = await Promise.all(
+      rows.flatMap((row) => {
+        const role = row.role;
+        if (role !== "user" && role !== "assistant") {
           return [];
         }
         return [
-          {
-            id: row.id,
-            role: row.role,
-            content: row.content,
-            createdAt: row.createdAt.toISOString(),
-            metadata: (row.metadata as ChatMessageMetadata | null) ?? null,
-          } satisfies ChatMessageSummary,
+          (async (): Promise<ChatMessageSummary> => {
+            const metadata = (row.metadata as ChatMessageMetadata | null) ?? null;
+            return {
+              id: row.id,
+              role,
+              content: row.content,
+              createdAt: row.createdAt.toISOString(),
+              metadata: await this.filterVisibleCitations(principal, metadata, citationDecisions),
+            };
+          })(),
         ];
       }),
+    );
+
+    return {
+      session: this.toSessionSummary(session),
+      messages: messageSummaries,
+    };
+  }
+
+  private async filterVisibleCitations(
+    principal: SessionUser,
+    metadata: ChatMessageMetadata | null,
+    decisions: Map<string, boolean>,
+  ): Promise<ChatMessageMetadata | null> {
+    const citations = metadata?.citations;
+    if (!citations || citations.length === 0) {
+      return metadata;
+    }
+
+    await Promise.all(
+      [...new Set(citations.map((citation) => citation.documentId))]
+        .filter((documentId) => !decisions.has(documentId))
+        .map(async (documentId) => {
+          const decision = await this.accessControl.canRead(documentId, {
+            tenantId: principal.tenantId,
+            userId: principal.id,
+            role: principal.role,
+            departmentId: principal.departmentId,
+          });
+          decisions.set(documentId, decision?.allowed ?? false);
+        }),
+    );
+
+    return {
+      ...metadata,
+      citations: citations.filter((citation) => decisions.get(citation.documentId) === true),
     };
   }
 
@@ -183,8 +226,12 @@ export class ChatService {
       history: ChatRunHistoryMessage[];
       insertUserMessage: boolean;
     };
+    let searchConfig: Awaited<ReturnType<SearchConfigsService["resolveForRun"]>> = null;
     try {
       model = await this.modelConfigsService.resolveForRun(principal, input.modelConfigId);
+      if (input.webSearch === true) {
+        searchConfig = await this.searchConfigsService.resolveForRun(principal);
+      }
       prepared = await this.preparePrompt(sessionId, content, input.retry === true);
     } catch (error) {
       this.activeSessions.delete(sessionId);
@@ -205,8 +252,6 @@ export class ChatService {
       principal: {
         tenantId: principal.tenantId,
         userId: principal.id,
-        role: principal.role,
-        groupIds: principal.groupIds,
       },
       model: {
         provider: model.provider,
@@ -218,6 +263,20 @@ export class ChatService {
       thinkingLevel,
       history: prepared.history,
       prompt: prepared.prompt,
+      webSearch: input.webSearch === true,
+      knowledgeBaseIds:
+        input.knowledgeBaseIds === undefined
+          ? undefined
+          : [...new Set(input.knowledgeBaseIds.map((id) => id.trim()).filter(Boolean))],
+      ...(searchConfig
+        ? {
+            webSearchConfig: {
+              provider: searchConfig.provider,
+              apiKey: searchConfig.apiKey,
+              ...(searchConfig.proxy ? { proxy: searchConfig.proxy } : {}),
+            },
+          }
+        : {}),
     };
 
     let upstream: Response;

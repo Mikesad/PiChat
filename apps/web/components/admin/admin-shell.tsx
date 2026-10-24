@@ -1,33 +1,54 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Icon } from "@/components/icons";
 import { type AdminSection, Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { IconButton } from "@/components/ui";
-import { roleLabels } from "@/lib/admin-data";
+import { canViewAudit, canViewMembers, roleLabels } from "@/lib/admin-data";
+import { AccessDeniedDialog } from "./access-denied-dialog";
+
+type RestrictedFeature = "members" | "audit";
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [deniedFeature, setDeniedFeature] = useState<RestrictedFeature | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const displayName = user?.displayName ?? "未登录";
   const roleLabel = user ? roleLabels[user.role] : "—";
+  const restrictedSection: RestrictedFeature | null = user
+    ? pathname.startsWith("/members") && !canViewMembers(user.role)
+      ? "members"
+      : pathname.startsWith("/audit") && !canViewAudit(user.role)
+        ? "audit"
+        : null
+    : null;
 
   const activeSection: AdminSection = pathname.startsWith("/permissions")
     ? "permissions"
-    : pathname.startsWith("/members")
-      ? "members"
-      : pathname.startsWith("/audit")
-        ? "audit"
-        : "knowledge";
+    : pathname.startsWith("/models")
+      ? "models"
+      : pathname.startsWith("/search")
+        ? "search"
+        : pathname.startsWith("/toolbox")
+          ? "toolbox"
+          : pathname.startsWith("/members")
+            ? "members"
+            : pathname.startsWith("/audit")
+              ? "audit"
+              : "knowledge";
   const sectionLabels: Record<AdminSection, string> = {
     knowledge: "知识库",
     permissions: "文档权限",
-    members: "成员与组",
+    models: "模型配置",
+    search: "搜索引擎",
+    toolbox: "工具箱",
+    members: "部门成员",
     audit: "审计日志",
   };
   const sectionLabel = sectionLabels[activeSection];
@@ -58,6 +79,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [sidebarOpen, closeSidebar]);
 
+  useEffect(() => {
+    if (!restrictedSection) {
+      return;
+    }
+    setDeniedFeature(restrictedSection);
+    router.replace("/knowledge");
+  }, [restrictedSection, router]);
+
   return (
     <div className="flex h-dvh overflow-hidden bg-bg text-fg">
       <a
@@ -70,7 +99,9 @@ export function AdminShell({ children }: { children: ReactNode }) {
       <Sidebar
         mode="manage"
         activeSection={activeSection}
+        userRole={user?.role}
         mobileOpen={sidebarOpen}
+        onRestrictedFeature={setDeniedFeature}
         onClose={closeSidebar}
       />
 
@@ -101,9 +132,18 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </header>
 
         <main id="main-content" className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8">{children}</div>
+          <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8">
+            {restrictedSection ? null : children}
+          </div>
         </main>
       </div>
+
+      <AccessDeniedDialog
+        open={deniedFeature !== null}
+        feature={deniedFeature === "members" ? "部门成员" : "审计日志"}
+        roleLabel={user ? roleLabels[user.role] : undefined}
+        onClose={() => setDeniedFeature(null)}
+      />
     </div>
   );
 }

@@ -8,9 +8,11 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import type {
+  DirectoryResponse,
   MemberListResponse,
   MemberResponse,
   ResetMemberPasswordRequest,
@@ -18,6 +20,7 @@ import type {
   UpdateMemberRequest,
 } from "@pichat/shared";
 import { z } from "zod";
+import { paginationSchema } from "../../common/pagination";
 import { parseBody } from "../../common/validation";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { SessionGuard } from "../auth/session.guard";
@@ -28,7 +31,7 @@ const roleSchema = z.enum(["member", "knowledge_admin", "security_admin", "tenan
 const updateMemberSchema = z.object({
   role: roleSchema.optional(),
   status: z.enum(["active", "disabled"]).optional(),
-  groupIds: z.array(z.string().min(1).max(36)).max(200).optional(),
+  departmentId: z.string().min(1).max(36).nullable().optional(),
 });
 
 const resetPasswordSchema = z.object({
@@ -41,8 +44,17 @@ export class MembersController {
   constructor(@Inject(MembersService) private readonly membersService: MembersService) {}
 
   @Get()
-  async list(@CurrentUser() user: SessionUser): Promise<MemberListResponse> {
-    return this.membersService.list(user);
+  async list(
+    @Query() query: unknown,
+    @CurrentUser() user: SessionUser,
+  ): Promise<MemberListResponse> {
+    const pagination = parseBody(paginationSchema, query);
+    return this.membersService.list(user, pagination);
+  }
+
+  @Get("directory")
+  async directory(@CurrentUser() user: SessionUser): Promise<DirectoryResponse> {
+    return this.membersService.directory(user);
   }
 
   @Patch(":id")

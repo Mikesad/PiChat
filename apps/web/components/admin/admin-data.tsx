@@ -1,11 +1,12 @@
 "use client";
 
-import type {
-  BatchUpdateDocumentAclResponse,
-  CreateKnowledgeBaseRequest,
-  DocumentSummary,
-  KnowledgeBaseSummary,
-  UpdateKnowledgeBaseRequest,
+import {
+  type BatchUpdateDocumentAclResponse,
+  type CreateKnowledgeBaseRequest,
+  type DocumentSummary,
+  type KnowledgeBaseSummary,
+  maxPageSize,
+  type UpdateKnowledgeBaseRequest,
 } from "@pichat/shared";
 import {
   createContext,
@@ -33,6 +34,7 @@ import {
   fetchKnowledgeBases,
   reparseDocument as reparseDocumentRequest,
   updateDocumentAcl,
+  updateDocumentAclMode,
   updateDocumentsAcl,
   updateKnowledgeBaseAcl,
   updateKnowledgeBase as updateKnowledgeBaseRequest,
@@ -51,7 +53,9 @@ interface AdminDataContextValue {
     documentId: string,
     exceptions: AclException[],
   ) => Promise<void>;
+  setDocumentAclMode: (documentId: string, mode: "inherit" | "restricted") => Promise<void>;
   setDefaultSubjects: (knowledgeBaseId: string, subjects: AclSubject[]) => Promise<void>;
+  setAccessSubjects: (knowledgeBaseId: string, subjects: AclException[]) => Promise<void>;
   setBatchDocumentExceptions: (
     knowledgeBaseId: string,
     documentIds: string[],
@@ -78,6 +82,7 @@ function mapDocument(document: DocumentSummary): AdminDocument {
     knowledgeBaseId: document.knowledgeBaseId,
     title: document.title,
     status: document.status,
+    aclMode: document.aclMode,
     sizeLabel: document.sizeLabel,
     updatedAt: document.updatedAt,
     updatedLabel: formatUpdatedLabel(document.updatedAt),
@@ -88,6 +93,7 @@ function mapDocument(document: DocumentSummary): AdminDocument {
     errorMessage: document.errorMessage,
     exceptions: document.exceptions,
     effectiveReaderCount: document.effectiveReaderCount,
+    canRead: document.canRead,
     canManageAcl: document.canManageAcl,
   };
 }
@@ -101,6 +107,8 @@ function mapKnowledgeBase(
     name: knowledgeBase.name,
     description: knowledgeBase.description ?? "",
     embeddingModel: knowledgeBase.embeddingModel,
+    ownerId: knowledgeBase.ownerId,
+    ownerDepartmentId: knowledgeBase.ownerDepartmentId,
     ragflowDatasetId: knowledgeBase.ragflowDatasetId,
     retrievalTopK: knowledgeBase.retrievalTopK,
     retrievalSimilarityThreshold: knowledgeBase.retrievalSimilarityThreshold,
@@ -110,6 +118,7 @@ function mapKnowledgeBase(
     updatedAt: knowledgeBase.updatedAt,
     updatedLabel: formatUpdatedLabel(knowledgeBase.updatedAt),
     defaultSubjects: knowledgeBase.defaultSubjects,
+    deniedSubjects: knowledgeBase.deniedSubjects ?? [],
     documentCount: knowledgeBase.documentCount,
     readableDocumentCount: knowledgeBase.readableDocumentCount,
     canManageAcl: knowledgeBase.canManageAcl,
@@ -133,9 +142,14 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      const response = await fetchKnowledgeBases();
+      const response = await fetchKnowledgeBases({
+        includeLocked: true,
+        pageSize: maxPageSize,
+      });
       const documentResponses = await Promise.all(
-        response.knowledgeBases.map((knowledgeBase) => fetchDocuments(knowledgeBase.id)),
+        response.knowledgeBases.map((knowledgeBase) =>
+          fetchDocuments(knowledgeBase.id, { includeLocked: true, pageSize: maxPageSize }),
+        ),
       );
 
       if (requestId !== requestIdRef.current) {
@@ -198,10 +212,47 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
     [reload, logout],
   );
 
+  const setDocumentAclMode = useCallback(
+    async (documentId: string, mode: "inherit" | "restricted") => {
+      try {
+        await updateDocumentAclMode(documentId, { mode });
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
   const setDefaultSubjects = useCallback(
     async (knowledgeBaseId: string, subjects: AclSubject[]) => {
       try {
         await updateKnowledgeBaseAcl(knowledgeBaseId, { defaultSubjects: subjects });
+        await reload();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          await logout();
+        }
+        throw cause;
+      }
+    },
+    [reload, logout],
+  );
+
+  const setAccessSubjects = useCallback(
+    async (knowledgeBaseId: string, subjects: AclException[]) => {
+      try {
+        await updateKnowledgeBaseAcl(knowledgeBaseId, {
+          defaultSubjects: subjects
+            .filter((subject) => subject.permission === "read")
+            .map(({ type, id }) => ({ type, id })),
+          deniedSubjects: subjects
+            .filter((subject) => subject.permission === "deny")
+            .map(({ type, id }) => ({ type, id })),
+        });
         await reload();
       } catch (cause) {
         if (cause instanceof ApiError && cause.status === 401) {
@@ -338,7 +389,9 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
         error,
         reload,
         setDocumentExceptions,
+        setDocumentAclMode,
         setDefaultSubjects,
+        setAccessSubjects,
         setBatchDocumentExceptions,
         createKnowledgeBase,
         deleteKnowledgeBase,

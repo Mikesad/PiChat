@@ -1,11 +1,15 @@
 import type {
+  ChunkListInput,
+  ChunkListResult,
   CreateDatasetInput,
   DocumentListInput,
+  RAGFlowChunk,
   RAGFlowDataset,
   RAGFlowDocument,
   RAGFlowEnvelope,
   RAGFlowOptions,
   RAGFlowParseState,
+  RawRAGFlowChunk,
   RawRAGFlowDataset,
   RawRAGFlowDocument,
   RawRetrievalChunk,
@@ -96,6 +100,50 @@ function toDataset(raw: RawRAGFlowDataset): RAGFlowDataset {
     id: raw.id ?? "",
     name: raw.name ?? "",
     embeddingModel: raw.embedding_model ?? null,
+  };
+}
+
+function toPositions(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function toChunk(raw: RawRAGFlowChunk, fallbackDocumentId = ""): RAGFlowChunk {
+  const rowId = raw["row_id()"] ?? raw.row_id;
+  return {
+    id: raw.id ?? raw.chunk_id ?? "",
+    content: raw.content ?? raw.content_with_weight ?? "",
+    documentId: raw.document_id ?? fallbackDocumentId,
+    documentKeyword: raw.docnm_kwd ?? raw.document_keyword ?? "",
+    positions: toPositions(raw.positions),
+    available: raw.available ?? (raw.available_int ?? 1) !== 0,
+    ...(typeof rowId === "number" ? { rowId } : {}),
+  };
+}
+
+function toChunkListResult(data: unknown, documentId: string): ChunkListResult {
+  const record =
+    data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : {};
+  const chunks = listFromData<RawRAGFlowChunk>(data, ["chunks"]).map((chunk) =>
+    toChunk(chunk, documentId),
+  );
+  const doc =
+    record.doc && typeof record.doc === "object" && !Array.isArray(record.doc)
+      ? (record.doc as Record<string, unknown>)
+      : {};
+  const total =
+    typeof doc.chunk_count === "number"
+      ? doc.chunk_count
+      : typeof doc.chunk_count === "string"
+        ? Number(doc.chunk_count)
+        : chunks.length;
+  return {
+    chunks,
+    total: Number.isFinite(total) ? total : chunks.length,
+    chunkMethod: typeof doc.chunk_method === "string" ? doc.chunk_method : null,
   };
 }
 
@@ -282,6 +330,51 @@ export class RAGFlowClient {
     return documents.find((document) => document.id === documentId) ?? null;
   }
 
+  async listChunks(
+    datasetId: string,
+    documentId: string,
+    input: ChunkListInput = {},
+  ): Promise<ChunkListResult> {
+    const params = new URLSearchParams({
+      page: String(input.page ?? 1),
+      page_size: String(input.pageSize ?? 100),
+    });
+    if (input.chunkId) {
+      params.set("id", input.chunkId);
+    }
+    if (input.keywords) {
+      params.set("keywords", input.keywords);
+    }
+
+    const data = await this.request<unknown>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/documents/${encodeURIComponent(documentId)}/chunks?${params.toString()}`,
+    );
+    return toChunkListResult(data, documentId);
+  }
+
+  async getChunk(
+    datasetId: string,
+    documentId: string,
+    chunkId: string,
+  ): Promise<RAGFlowChunk | null> {
+    const data = await this.request<unknown>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/documents/${encodeURIComponent(documentId)}/chunks/${encodeURIComponent(chunkId)}`,
+    );
+    if (Array.isArray(data)) {
+      return data.length > 0 ? toChunk(data[0] as RawRAGFlowChunk, documentId) : null;
+    }
+    if (data && typeof data === "object") {
+      const record = data as Record<string, unknown>;
+      if (record.chunk && typeof record.chunk === "object") {
+        return toChunk(record.chunk as RawRAGFlowChunk, documentId);
+      }
+      if (typeof record.id === "string" || typeof record.chunk_id === "string") {
+        return toChunk(record as RawRAGFlowChunk, documentId);
+      }
+    }
+    return null;
+  }
+
   async parseDocuments(datasetId: string, documentIds: string[]): Promise<void> {
     await this.request<unknown>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/chunks`, {
       method: "POST",
@@ -314,6 +407,7 @@ export class RAGFlowClient {
         page_size: input.topK ?? 30,
         similarity_threshold: input.similarityThreshold ?? 0.2,
         vector_similarity_weight: input.vectorSimilarityWeight ?? 0.3,
+        ...(input.rerankId ? { rerank_id: input.rerankId } : {}),
         top_k: 1024,
       }),
     });

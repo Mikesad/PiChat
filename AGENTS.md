@@ -9,6 +9,7 @@
 - `README.md`：当前完成度、环境要求、服务端口。
 - `docs/当前进度.md`：当前完成度、已确认决策、mock/真实边界、环境阻塞、第一冲刺与验收。新会话接手后端前必须先读；每完成一个阶段更新它。
 - `docs/test-plan-core.md`：核心链路测试方案（自动化门禁 + 真实环境人工 P0/P1）；每次验收按“先自动化、后人工”执行。
+- `docs/test-plan-kb-acl.md`：知识库权限体系测试思路、账号/知识库/文档矩阵与本机演示数据；改 ACL 逻辑前先对照该矩阵。
 - `docs/handoff-E.md`：任务 E 交接提示词、自动化结果与下一步；新会话可直接复用其中的提示词。
 - `docs/adr/`：Pi SDK、MySQL ACL、SSE、Runtime JSONL、知识库生命周期与删除语义的关键决策。
 - `package.json`、`turbo.json`、各 workspace 的 `package.json`：命令的最终事实来源。
@@ -62,6 +63,12 @@ pnpm format
 - `tenantId`、`userId`、`documentIds` 只能来自服务端认证上下文，**绝不能接受模型或前端传入的值**。
 - 检索链路必须是：计算 `allowedDocumentIds` → RAGFlow `document_ids` 过滤 → 检索后复核 → 引用展示前再复核。
 - ACL 缓存 key 必须带 `acl_version`；权限撤销后下一次工具调用立即生效。
+- 一个用户最多属于一个部门（`users.department_id`）；部门授权只匹配该部门，未分配部门的用户不匹配部门授权。
+- 判定顺序：账号启用 → 知识库访问资格（部门/用户 `read`，deny 优先）→ 文档 `acl_mode` → 文档 ACL（deny 优先）→ 异常默认拒绝。文档级 read 不能绕过知识库授权。
+- `documents.acl_mode`：`inherit` 继承知识库权限（文档 deny 仍生效），`restricted` 必须额外命中文档 read；非法模式拒绝。
+- 知识库默认 ACL 同时支持 `read` 与 `deny`；知识库级 deny 覆盖文档级 read；同一主体不能同时在允许和禁止名单。
+- `/internal/access/*` 只信任 `tenantId`/`userId`；角色、部门和账号状态由 API 每次查库解析，不能信任 Runtime 传入的身份字段。
+- 历史消息引用在返回前必须按当前 ACL 复核，不可读引用不得返回。
 - 开源 RAGFlow 只有 dataset 级权限，文档级授权由 PiChat 自己实现，不要依赖 RAGFlow 的权限 UI。
 - 跨租户查询必须有集成测试；没有测试就不要声称隔离完成。
 - 模型配置的 API Key 必须服务端 AES-256-GCM 加密存储（`model_configs.encrypted_api_key`），只在单次 Runtime run 的内存中出现；不得进浏览器、日志或 SSE。
@@ -81,6 +88,8 @@ pnpm format
 - 使用 `@earendil-works/pi-coding-agent` 1.3.0；旧的 `@mariozechner/*` 已废弃。
 - Pi 内置的 `read` / `write` / `edit` / `bash` 必须禁用，只注册知识库工具。
 - Runtime 已接入 prompt、SSE、`kb_search` / `kb_read` 和 Pi JSONL 会话持久化；内置编码工具仍然禁用。
+- 联网搜索使用 `pi-web-access` 进程内扩展，按请求级 `webSearch` 开关加载；只允许 `web_search`，不要开放 fetch/source_check/commands。`WEB_SEARCH_API_KEY` 或用 `BOCHA_API_KEY` / `TAVILY_API_KEY` 注入，Key 不得进浏览器、日志或 SSE。
+- 对话目标知识库 `knowledgeBaseIds` 只能收窄范围：Runtime 必须用服务端 ACL scope 复核，模型传入的 `knowledgeBaseIds` 不能扩大选择；空数组表示不检索知识库。
 - 工具权限用 `tool_call` 拦截，工具结果用 `tool_result` 脱敏；当前只允许知识库工具。
 - Runtime 的 `cwd` 是每会话隔离空目录，不存放上传文件；`noExtensions` / `noSkills` / `noContextFiles` 保持开启。
 - `kb_read` 只接受 `kb_search` 返回的引用序号，不接受模型传入的 `documentId`。
@@ -90,6 +99,7 @@ pnpm format
 
 - 根 `.env` 供 API / Runtime / Worker 使用；Web 使用 `apps/web/.env.local` 的 `API_URL`。
 - `INTERNAL_SHARED_SECRET` 必须由 API 与 Runtime 共用；`AGENT_RUNTIME_DATA_DIR` 指向 Runtime JSONL 与工作目录，`AGENT_RUNTIME_URL` / `API_INTERNAL_URL` 供内部调用。这些值只写入本地 `.env`，不要提交。
+- 联网搜索使用 `WEB_SEARCH_PROVIDER`（`bocha`/`tavily`）、`WEB_SEARCH_API_KEY`、`WEB_SEARCH_MAX_RESULTS`；扩展配置写到 `AGENT_RUNTIME_DATA_DIR/pi-agent/web-search.json`，缓存写到 `AGENT_RUNTIME_DATA_DIR/web-search-cache`。
 - 当前开发机使用本机 MySQL **3306** 和专用库 `pichat`；Docker Compose 仍映射 3307，Redis 6379，MinIO 9000/9001。
 - RAGFlow 使用独立部署，不包含在 `infra/docker/compose.dev.yaml` 中。
 - `pnpm db:push` 会直接修改数据库；对共享或生产库执行前必须先征得用户同意。
@@ -100,12 +110,12 @@ pnpm format
 
 ## 当前完成度
 
-已实现：monorepo、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、用户级模型配置加密存储、文档上传与 Worker RAGFlow 轮询、Agent Runtime（prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话）、业务 API 的 chat 会话/消息/SSE 代理与 MySQL 落库、真实对话 UI（流式、思考、工具、引用、停止、重试）、知识库同步创建与软删除、文档软删除与清理、同库多文档批量授权（整体替换）、文档在线预览（知识库详情与聊天引用共用，PDF/DOCX/MD/TXT，ACL 校验 + Range）、成员/用户组查询与编辑（角色、状态、用户组、密码重置）、审计查询 API 与审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime。真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证。
+已实现：monorepo、真实邮箱密码登录与 HttpOnly 会话、Web BFF、知识库/文档/ACL 真实 API 与动态 ACL、可重复 seed、知识库与文档权限页接真、ACL 变更写审计、用户级模型配置加密存储（对话/Embedding/ReRank，视觉与语音仅展示）、管理端模型配置页与搜索引擎页、用户级搜索引擎配置（Tavily、加密 Key、HTTP 代理、默认配置、测试连接）、文档上传与 Worker RAGFlow 轮询、Agent Runtime（prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话）、业务 API 的 chat 会话/消息/SSE 代理与 MySQL 落库、真实对话 UI（流式、思考、工具、引用、停止、重试）、知识库同步创建与软删除、文档软删除与清理、同库多文档批量授权（整体替换）、文档在线预览（知识库详情与聊天引用共用，PDF/DOCX/MD/TXT，ACL 校验 + Range）、成员/部门查询与编辑（角色、状态、部门、密码重置）、审计查询 API 与审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime、知识库级允许/禁止名单（deny 覆盖文档 read）、单部门用户模型（users.department_id）、文档 acl_mode（inherit/restricted）与严格知识库门禁、知识库创建者 owner_id、历史引用读取复核、对话目标知识库多选（按会话前端记忆，空选不检索）、联网搜索（`pi-web-access` 进程内扩展，请求级开关，仅 `web_search`，Web 点击/键盘/滚轮切换；Embedding 接入知识库创建，ReRank 通过 RAGFlow `rerank_id` 接入检索）。真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证；本地已配置 Tavily，联网搜索工具级真实搜索已验证，完整 LLM 联网回答待模型。
 
-未实现：Agent + 真实 LLM 的 RAG 回答/引用 E2E（当前 `model_configs` 为 0，需先配置模型）、RAGFlow 解析配置（chunk 大小/方法）修改、用户组增删改、生产硬化、MCP/CLI、多租户 SaaS。
+未实现：Agent + 真实 LLM 的 RAG 回答/引用 E2E（需先配置可用对话模型）、完整 LLM 联网回答/引用 E2E（Tavily 工具级搜索已验证）、附件上传（当前仅输入区图标占位）、RAGFlow 解析配置（chunk 大小/方法）修改、部门增删改（仅查询/编辑成员所属部门）、生产硬化、MCP/CLI、多租户 SaaS。
 
-登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；模型配置在 `components/model-config`，通过左下角账号菜单打开。对话页在 `apps/web/components/chat-workspace.tsx`，通过 Web BFF 调用业务 API。
+登录页在 `apps/web/app/login`，会话守卫在 `components/auth`；对话模型配置在 `components/model-config`，通过左下角账号菜单打开。对话页在 `apps/web/components/chat-workspace.tsx`，通过 Web BFF 调用业务 API；输入区左侧为附件占位、模型与思考，右侧为联网、知识库和发送/停止；知识库按钮打开多选表单，选择按会话在前端记忆。
 
-管理端页面在 `apps/web/app/(admin)`：`knowledge`、`permissions`、`members`、`audit` 均已接真实 API。成员页的「可读文档」仍是前端预览，不是服务端按成员逐篇判定；成员编辑与密码重置仅 `tenant_admin` 可用。
+管理端页面在 `apps/web/app/(admin)`：`knowledge`、`permissions`、`models`、`search`、`members`、`audit` 均已接真实 API。模型配置页与搜索引擎页按登录用户保存配置；成员页的「可读文档」仍是前端预览，不是服务端按成员逐篇判定；成员编辑与密码重置仅 `tenant_admin` 可用。
 
-`pnpm test` 覆盖 ACL 纯策略、SSE 解析、Runtime faux 集成、kb_search ACL 过滤、API 会话归属/内部 ACL/模型配置/聊天重试/跨租户、知识库创建与软删除、文档删除清理、批量授权、文档预览的 ACL/路径越界/软删除与 Range 解析、成员查询与编辑/最后管理员保护/密码重置清会话、审计查询过滤、知识库设置更新与检索参数、Worker 删除竞态；当前共 109 个测试，但不是完整端到端覆盖。真实 RAGFlow 解析/检索已用 MD/TXT/PDF/DOCX 验证；Agent + 真实 LLM 的端到端回答仍待模型配置。
+`pnpm test` 覆盖 ACL 纯策略、SSE 解析、Runtime faux 集成、kb_search ACL 过滤、API 会话归属/内部 ACL/模型配置/搜索配置/聊天重试/跨租户、知识库创建与软删除、文档删除清理、批量授权、文档预览的 ACL/路径越界/软删除与 Range 解析、成员查询与编辑/最后管理员保护/密码重置清会话、审计查询过滤、知识库设置更新与检索参数、严格知识库门禁/文档 acl_mode、历史引用复核、对话目标知识库透传与空选、模型 kind 默认值、联网搜索策略/凭据门控/扩展注册/开关工具调用、Worker 删除竞态；当前共 181 个测试，但不是完整端到端覆盖。真实 RAGFlow 解析/检索已用 MD/TXT/PDF/DOCX 验证；Agent + 真实 LLM 的端到端回答仍待模型配置。

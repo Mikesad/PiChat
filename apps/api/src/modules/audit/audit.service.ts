@@ -1,18 +1,19 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database } from "@pichat/db";
 import { auditLogs, documents, knowledgeBases, users } from "@pichat/db";
-import type {
-  AuditLogListResponse,
-  AuditLogSummary,
-  AuditResult,
-  SessionUser,
+import {
+  type AuditLogListResponse,
+  type AuditLogSummary,
+  type AuditResult,
+  defaultPageSize,
+  type SessionUser,
 } from "@pichat/shared";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { forbidden } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
+import { buildPaginationMeta, type PaginationInput, pageOffset } from "../../common/pagination";
 
-export interface AuditLogQuery {
-  limit?: number;
+export interface AuditLogQuery extends Partial<PaginationInput> {
   action?: string;
   resourceType?: string;
   result?: AuditResult;
@@ -102,7 +103,10 @@ export class AuditService {
       throw forbidden();
     }
 
-    const limit = query.limit ?? 100;
+    const pagination: PaginationInput = {
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? defaultPageSize,
+    };
     const conditions = [eq(auditLogs.tenantId, principal.tenantId)];
     if (query.action) {
       conditions.push(eq(auditLogs.action, query.action));
@@ -119,12 +123,18 @@ export class AuditService {
       );
     }
 
-    const rows = await this.db
-      .select()
-      .from(auditLogs)
-      .where(and(...conditions))
-      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
-      .limit(limit);
+    const where = and(...conditions);
+    const [totalRows, rows] = await Promise.all([
+      this.db.select({ total: count() }).from(auditLogs).where(where),
+      this.db
+        .select()
+        .from(auditLogs)
+        .where(where)
+        .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+        .limit(pagination.pageSize)
+        .offset(pageOffset(pagination)),
+    ]);
+    const total = totalRows[0]?.total ?? 0;
 
     const actorIds = [...new Set(rows.flatMap((row) => (row.actorId ? [row.actorId] : [])))];
     const knowledgeBaseIds = [
@@ -220,6 +230,6 @@ export class AuditService {
       };
     });
 
-    return { logs };
+    return { logs, pagination: buildPaginationMeta(pagination, total) };
   }
 }

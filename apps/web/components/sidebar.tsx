@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
+import { canViewAudit, canViewMembers, type UserRole } from "@/lib/admin-data";
 import type { KnowledgeBase, Session } from "@/lib/chat-data";
 import { cn } from "@/lib/utils";
 import { Icon, LogoMark } from "./icons";
@@ -9,7 +10,14 @@ import { IconButton } from "./ui";
 import { UserMenu } from "./user-menu";
 
 export type SidebarMode = "chat" | "manage";
-export type AdminSection = "knowledge" | "permissions" | "members" | "audit";
+export type AdminSection =
+  | "knowledge"
+  | "permissions"
+  | "models"
+  | "search"
+  | "toolbox"
+  | "members"
+  | "audit";
 
 interface SidebarProps {
   mode: SidebarMode;
@@ -17,9 +25,11 @@ interface SidebarProps {
   sessions?: Session[];
   activeSessionId?: string;
   knowledgeBases?: KnowledgeBase[];
+  userRole?: UserRole;
   mobileOpen: boolean;
   onSelectSession?: (id: string) => void;
   onNewChat?: () => void;
+  onRestrictedFeature?: (feature: "members" | "audit") => void;
   onClose: () => void;
 }
 
@@ -29,9 +39,11 @@ export function Sidebar({
   sessions = [],
   activeSessionId = "",
   knowledgeBases = [],
+  userRole,
   mobileOpen,
   onSelectSession,
   onNewChat,
+  onRestrictedFeature,
   onClose,
 }: SidebarProps) {
   const mobileAsideRef = useRef<HTMLElement>(null);
@@ -51,8 +63,10 @@ export function Sidebar({
           sessions={sessions}
           activeSessionId={activeSessionId}
           knowledgeBases={knowledgeBases}
+          userRole={userRole}
           onSelectSession={onSelectSession}
           onNewChat={onNewChat}
+          onRestrictedFeature={onRestrictedFeature}
           onClose={onClose}
         />
       </aside>
@@ -101,8 +115,10 @@ function SidebarContent({
   sessions = [],
   activeSessionId = "",
   knowledgeBases = [],
+  userRole,
   onSelectSession,
   onNewChat,
+  onRestrictedFeature,
   onClose,
   showClose = false,
 }: SidebarContentProps) {
@@ -131,7 +147,12 @@ function SidebarContent({
           onClose={onClose}
         />
       ) : (
-        <ManageNav activeSection={activeSection} onClose={onClose} />
+        <ManageNav
+          activeSection={activeSection}
+          userRole={userRole}
+          onRestrictedFeature={onRestrictedFeature}
+          onClose={onClose}
+        />
       )}
 
       <UserMenu />
@@ -344,12 +365,26 @@ const adminNav = [
     href: "/permissions",
     label: "文档权限",
     description: "读取、拒绝与访问检查",
-    icon: "shield-check",
+    icon: "lock",
+  },
+  {
+    id: "models",
+    href: "/models",
+    label: "模型配置",
+    description: "对话、Embedding 与 ReRank",
+    icon: "sparkles",
+  },
+  {
+    id: "search",
+    href: "/search",
+    label: "搜索引擎",
+    description: "联网搜索与 API Key",
+    icon: "globe",
   },
   {
     id: "members",
     href: "/members",
-    label: "成员与组",
+    label: "部门成员",
     description: "本地成员与角色",
     icon: "users",
   },
@@ -360,13 +395,24 @@ const adminNav = [
     description: "权限与管理变更",
     icon: "clipboard",
   },
+  {
+    id: "toolbox",
+    href: "/toolbox",
+    label: "工具箱",
+    description: "技能、MCP 与浏览器连接",
+    icon: "wrench",
+  },
 ] as const;
 
 function ManageNav({
   activeSection,
+  userRole,
+  onRestrictedFeature,
   onClose,
 }: {
   activeSection: AdminSection;
+  userRole?: UserRole;
+  onRestrictedFeature?: (feature: "members" | "audit") => void;
   onClose: () => void;
 }) {
   return (
@@ -378,12 +424,26 @@ function ManageNav({
         <ul className="space-y-1">
           {adminNav.map((item) => {
             const active = activeSection === item.id;
+            const deniedFeature =
+              item.id === "members" && !canViewMembers(userRole)
+                ? "members"
+                : item.id === "audit" && !canViewAudit(userRole)
+                  ? "audit"
+                  : null;
             return (
               <li key={item.id}>
                 <Link
                   href={item.href}
-                  onClick={onClose}
+                  onClick={(event) => {
+                    if (deniedFeature) {
+                      event.preventDefault();
+                      onRestrictedFeature?.(deniedFeature);
+                    }
+                    onClose();
+                  }}
                   aria-current={active ? "page" : undefined}
+                  aria-disabled={deniedFeature ? true : undefined}
+                  title={deniedFeature ? "没有访问权限" : undefined}
                   className={cn(
                     "flex min-h-12 items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-150",
                     active
@@ -393,17 +453,19 @@ function ManageNav({
                 >
                   <span
                     className={cn(
-                      "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md",
-                      active ? "bg-accent text-accent-fg" : "bg-surface-2 text-subtle",
+                      "mt-0.5 flex size-7 shrink-0 items-center justify-center",
+                      active ? "text-accent-text" : "text-subtle",
                     )}
                   >
-                    <Icon name={item.icon} size={15} />
+                    <Icon name={item.icon} size={16} />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-medium">{item.label}</span>
                     <span className="mt-0.5 block text-[11px] text-subtle">{item.description}</span>
                   </span>
-                  {active ? (
+                  {deniedFeature ? (
+                    <Icon name="lock" size={13} className="mt-1 shrink-0 text-subtle" />
+                  ) : active ? (
                     <Icon
                       name="chevron-right"
                       size={14}
@@ -422,7 +484,7 @@ function ManageNav({
           <Icon name="users" size={12} />
           成员来源
         </p>
-        <p className="mt-1">成员与用户组来自本地数据库，当前只读；权限变更由服务端写入审计。</p>
+        <p className="mt-1">成员与部门来自本地数据库，当前只读；权限变更由服务端写入审计。</p>
       </div>
     </div>
   );

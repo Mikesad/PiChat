@@ -15,14 +15,24 @@ import type {
 } from "@pichat/shared";
 import { type AccessClient, AccessClientError } from "../clients/access-client.js";
 import type { RuntimeConfig } from "../config.js";
+import { ChunkStore } from "../tools/chunk-store.js";
+import { createKbDocumentOutlineTool } from "../tools/kb-document-outline.js";
+import { createKbFindInDocumentTool } from "../tools/kb-find-in-document.js";
+import { createKbListScopeTool } from "../tools/kb-list-scope.js";
 import { createKbReadTool } from "../tools/kb-read.js";
+import { createKbReadAroundTool } from "../tools/kb-read-around.js";
 import { createKbSearchTool } from "../tools/kb-search.js";
 import { type KbToolDetails, ToolExecutionError } from "../tools/types.js";
 import { createRunModel, type RunModel } from "./model.js";
 import { RunState } from "./run-state.js";
 import { openPiSession } from "./session-store.js";
-import { PIChatSystemPrompt } from "./system-prompt.js";
-import { toolPolicyExtension } from "./tool-policy.js";
+import { buildPIChatSystemPrompt } from "./system-prompt.js";
+import { createToolPolicyExtension } from "./tool-policy.js";
+import {
+  createWebSearchCredentialGate,
+  type WebSearchProviderName,
+} from "./web-search-credential.js";
+import { loadWebSearchExtension } from "./web-search-extension.js";
 
 export interface RunLogger {
   info(payload: Record<string, unknown>, message?: string): void;
@@ -107,6 +117,7 @@ export class RunService {
     let session: AgentSession | undefined;
     let runModel: Awaited<ReturnType<typeof createRunModel>> | undefined;
     let abortSession: (() => void) | undefined;
+    let webSearchGate: ReturnType<typeof createWebSearchCredentialGate> | undefined;
     let citationQueue: Promise<void> = Promise.resolve();
     const emittedCitations = new Set<string>();
 
@@ -134,14 +145,42 @@ export class RunService {
 
       runModel = await this.createModel(input.model, this.deps.config);
 
+      const knowledgeBaseIds =
+        input.knowledgeBaseIds === undefined
+          ? undefined
+          : [...new Set(input.knowledgeBaseIds.map((id) => id.trim()).filter(Boolean))];
+      const webSearchEnabled = input.webSearch === true;
+      const webSearchSettings = webSearchEnabled
+        ? resolveWebSearchSettings(input.webSearchConfig, this.deps.config.webSearch)
+        : undefined;
+      webSearchGate = webSearchSettings
+        ? createWebSearchCredentialGate(webSearchSettings)
+        : undefined;
+      const webSearchExtension = webSearchEnabled
+        ? await loadWebSearchExtension(this.deps.config)
+        : undefined;
       const resourceLoader = new DefaultResourceLoader({
         cwd: opened.workspace,
         agentDir: join(opened.workspace, ".pi"),
         noExtensions: true,
         noSkills: true,
         noContextFiles: true,
-        extensionFactories: [toolPolicyExtension],
-        systemPromptOverride: () => PIChatSystemPrompt,
+        extensionFactories: [
+          createToolPolicyExtension({
+            allowWebSearch: webSearchEnabled,
+            webSearchMaxResults: this.deps.config.webSearch.maxResults,
+            ...(webSearchSettings
+              ? {
+                  webSearchProvider: webSearchSettings.provider,
+                  webSearchProxy: webSearchSettings.proxy,
+                  webSearchGate,
+                }
+              : {}),
+          }),
+          ...(webSearchExtension ? [webSearchExtension] : []),
+        ],
+        systemPromptOverride: () =>
+          buildPIChatSystemPrompt(webSearchEnabled, this.deps.config.webSearch.maxResults),
       });
       await resourceLoader.reload();
 
@@ -150,8 +189,20 @@ export class RunService {
         accessClient: this.deps.accessClient,
         ragflow: this.deps.ragflow,
         citations: state.citations,
+        documents: state.documents,
+        chunks: new ChunkStore(this.deps.ragflow),
         config: this.deps.config,
+        knowledgeBaseIds,
       };
+      const toolNames = [
+        "kb_search",
+        "kb_read",
+        "kb_list_scope",
+        "kb_read_around",
+        "kb_find_in_document",
+        "kb_document_outline",
+        ...(webSearchEnabled ? ["web_search"] : []),
+      ];
 
       const created = await createAgentSession({
         cwd: opened.workspace,
@@ -160,15 +211,22 @@ export class RunService {
         model: runModel.model,
         thinkingLevel: input.thinkingLevel,
         noTools: "all",
-        tools: ["kb_search", "kb_read"],
-        customTools: [createKbSearchTool(toolContext), createKbReadTool(toolContext)],
+        tools: toolNames,
+        customTools: [
+          createKbSearchTool(toolContext),
+          createKbReadTool(toolContext),
+          createKbListScopeTool(toolContext),
+          createKbReadAroundTool(toolContext),
+          createKbFindInDocumentTool(toolContext),
+          createKbDocumentOutlineTool(toolContext),
+        ],
         resourceLoader,
         settingsManager: SettingsManager.inMemory(),
         sessionManager: opened.sessionManager,
         sessionStartEvent: { type: "session_start", reason: opened.restored ? "resume" : "new" },
       });
       session = created.session;
-      session.setActiveToolsByName(["kb_search", "kb_read"]);
+      session.setActiveToolsByName(toolNames);
       await session.bindExtensions({ abortHandler: () => controller.abort() });
 
       abortSession = () => {
@@ -269,6 +327,7 @@ export class RunService {
         );
       }
     } finally {
+      webSearchGate?.release();
       clearTimeout(timeout);
       if (abortSession) {
         controller.signal.removeEventListener("abort", abortSession);
@@ -409,12 +468,27 @@ function displayToolName(toolName: string): string {
   if (toolName === "kb_read") {
     return "kb.read";
   }
+  if (toolName === "kb_list_scope") {
+    return "kb.list";
+  }
+  if (toolName === "kb_read_around") {
+    return "kb.read_around";
+  }
+  if (toolName === "kb_find_in_document") {
+    return "kb.find";
+  }
+  if (toolName === "kb_document_outline") {
+    return "kb.outline";
+  }
+  if (toolName === "web_search") {
+    return "web.search";
+  }
   return toolName;
 }
 
 function describeToolInput(toolName: string, args: unknown): string {
   if (!args || typeof args !== "object") {
-    return toolName === "kb_search" ? "检索授权知识库" : "读取引用文档";
+    return fallbackToolDescription(toolName);
   }
   const record = args as Record<string, unknown>;
   if (toolName === "kb_search" && typeof record.query === "string") {
@@ -423,7 +497,79 @@ function describeToolInput(toolName: string, args: unknown): string {
   if (toolName === "kb_read" && typeof record.citation === "number") {
     return `读取引用 [${record.citation}]`;
   }
-  return toolName === "kb_search" ? "检索授权知识库" : "读取引用文档";
+  if (toolName === "kb_list_scope") {
+    return typeof record.query === "string"
+      ? `筛选 ${truncate(record.query, 32)} · 列出授权范围`
+      : "列出授权知识库";
+  }
+  if (toolName === "kb_read_around") {
+    if (typeof record.citation === "number") {
+      return `读取引用 [${record.citation}] 的前后片段`;
+    }
+    if (typeof record.document === "string") {
+      return typeof record.chunkIndex === "number"
+        ? `读取 ${record.document} 第 ${record.chunkIndex} 段的前后片段`
+        : `读取 ${record.document} 的首段前后片段`;
+    }
+  }
+  if (toolName === "kb_find_in_document" && typeof record.query === "string") {
+    return `精确查找 ${truncate(record.query, 40)}`;
+  }
+  if (toolName === "kb_document_outline") {
+    return "查看文档目录";
+  }
+  if (toolName === "web_search") {
+    const queries = Array.isArray(record.queries)
+      ? record.queries.filter((query): query is string => typeof query === "string")
+      : [];
+    if (queries.length > 0) {
+      return `搜索 ${truncate(queries.slice(0, 2).join(" / "), 48)}`;
+    }
+    if (typeof record.query === "string") {
+      return `搜索 ${truncate(record.query, 48)}`;
+    }
+  }
+  return fallbackToolDescription(toolName);
+}
+
+function resolveWebSearchSettings(
+  requestConfig: ChatRunRequest["webSearchConfig"] | undefined,
+  fallback: RuntimeConfig["webSearch"],
+): { provider: WebSearchProviderName; apiKey: string; proxy?: string } {
+  const provider =
+    requestConfig?.provider === "tavily" || requestConfig?.provider === "bocha"
+      ? requestConfig.provider
+      : fallback.provider;
+  return {
+    provider,
+    apiKey: requestConfig?.apiKey?.trim() || fallback.apiKey,
+    ...(requestConfig?.proxy?.trim() ? { proxy: requestConfig.proxy.trim() } : {}),
+  };
+}
+
+function fallbackToolDescription(toolName: string): string {
+  if (toolName === "kb_search") {
+    return "检索授权知识库";
+  }
+  if (toolName === "kb_read") {
+    return "读取引用文档";
+  }
+  if (toolName === "kb_list_scope") {
+    return "列出授权知识库";
+  }
+  if (toolName === "kb_read_around") {
+    return "读取片段前后文";
+  }
+  if (toolName === "kb_find_in_document") {
+    return "在文档内精确查找";
+  }
+  if (toolName === "kb_document_outline") {
+    return "查看文档目录";
+  }
+  if (toolName === "web_search") {
+    return "联网搜索";
+  }
+  return toolName;
 }
 
 function truncate(value: string, max: number): string {

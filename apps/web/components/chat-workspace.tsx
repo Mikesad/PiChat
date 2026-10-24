@@ -9,7 +9,7 @@ import type {
   ToolEndData,
   ToolStartData,
 } from "@pichat/shared";
-import { resolveCitationUsage } from "@pichat/shared";
+import { maxPageSize, resolveCitationUsage } from "@pichat/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatRun,
@@ -29,6 +29,7 @@ import { CitationsPanel } from "./citations-panel";
 import { Composer } from "./composer";
 import { DocumentPreviewDialog } from "./document-preview-dialog";
 import { EmptyState } from "./empty-state";
+import { KnowledgeBasePicker } from "./knowledge-base-picker";
 import { MessageList } from "./message-list";
 import { useModelConfig } from "./model-config/model-config-provider";
 import { Sidebar } from "./sidebar";
@@ -84,6 +85,12 @@ export function ChatWorkspace() {
   const [citationsOpen, setCitationsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [knowledgeBasePickerOpen, setKnowledgeBasePickerOpen] = useState(false);
+  const [knowledgeBaseSelections, setKnowledgeBaseSelections] = useState<Record<string, string[]>>(
+    {},
+  );
+  const [draftKnowledgeBaseIds, setDraftKnowledgeBaseIds] = useState<string[] | null>(null);
 
   const runIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -96,6 +103,20 @@ export function ChatWorkspace() {
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const messages = activeSessionId ? (threads[activeSessionId] ?? []) : [];
+  const allKnowledgeBaseIds = useMemo(
+    () => knowledgeBases.map((knowledgeBase) => knowledgeBase.id),
+    [knowledgeBases],
+  );
+  const selectedKnowledgeBaseIds = useMemo(() => {
+    const selection = activeSessionId
+      ? knowledgeBaseSelections[activeSessionId]
+      : (draftKnowledgeBaseIds ?? undefined);
+    if (selection === undefined) {
+      return allKnowledgeBaseIds;
+    }
+    const available = new Set(allKnowledgeBaseIds);
+    return selection.filter((id) => available.has(id));
+  }, [activeSessionId, allKnowledgeBaseIds, draftKnowledgeBaseIds, knowledgeBaseSelections]);
 
   const citationState = useMemo(() => {
     const thread = activeSessionId ? (threads[activeSessionId] ?? []) : [];
@@ -141,6 +162,20 @@ export function ChatWorkspace() {
     sidebarReturnFocusRef.current = null;
     window.requestAnimationFrame(() => target?.focus());
   }, []);
+
+  const applyKnowledgeBases = useCallback(
+    (ids: string[]) => {
+      const available = new Set(allKnowledgeBaseIds);
+      const next = ids.filter((id) => available.has(id));
+      if (activeSessionId) {
+        setKnowledgeBaseSelections((previous) => ({ ...previous, [activeSessionId]: next }));
+      } else {
+        setDraftKnowledgeBaseIds(next);
+      }
+      setKnowledgeBasePickerOpen(false);
+    },
+    [activeSessionId, allKnowledgeBaseIds],
+  );
 
   const openCitations = useCallback(() => {
     citationsReturnFocusRef.current =
@@ -255,7 +290,7 @@ export function ChatWorkspace() {
       try {
         const [sessionResponse, knowledgeResponse] = await Promise.all([
           fetchChatSessions(),
-          fetchKnowledgeBases(),
+          fetchKnowledgeBases({ pageSize: maxPageSize }),
         ]);
         if (cancelled) {
           return;
@@ -457,6 +492,7 @@ export function ChatWorkspace() {
         return;
       }
 
+      const selectedIdsForRun = knowledgeBases.length === 0 ? undefined : selectedKnowledgeBaseIds;
       let sessionId = activeSessionId;
       try {
         if (!sessionId) {
@@ -472,6 +508,15 @@ export function ChatWorkspace() {
       }
 
       const targetSessionId = sessionId as string;
+      if (!activeSessionId) {
+        if (selectedIdsForRun !== undefined) {
+          setKnowledgeBaseSelections((previous) => ({
+            ...previous,
+            [targetSessionId]: selectedIdsForRun,
+          }));
+        }
+        setDraftKnowledgeBaseIds(null);
+      }
       const assistantId = `assistant-${Date.now()}`;
       const timestamp = new Date().toISOString();
       const userMessage: ChatMessage = {
@@ -513,7 +558,13 @@ export function ChatWorkspace() {
       try {
         const response = await streamChatMessage(
           targetSessionId,
-          { content: text, thinkingLevel, retry },
+          {
+            content: text,
+            thinkingLevel,
+            retry,
+            webSearch: webSearchEnabled,
+            knowledgeBaseIds: selectedIdsForRun,
+          },
           controller.signal,
         );
         await consumeChatStream(response, (event) =>
@@ -540,11 +591,14 @@ export function ChatWorkspace() {
       activeConfig,
       activeSessionId,
       handleEvent,
+      knowledgeBases.length,
       modelsReady,
       refreshSessions,
       runStatus,
+      selectedKnowledgeBaseIds,
       showToast,
       updateMessage,
+      webSearchEnabled,
     ],
   );
 
@@ -651,7 +705,7 @@ export function ChatWorkspace() {
 
       <div
         className="flex min-w-0 flex-1 flex-col"
-        inert={sidebarOpen || citationsOpen || previewCitation !== null}
+        inert={sidebarOpen || citationsOpen || previewCitation !== null || knowledgeBasePickerOpen}
       >
         <ChatHeader
           title={activeSession?.title ?? "新对话"}
@@ -695,8 +749,12 @@ export function ChatWorkspace() {
               onSend={(thinkingLevel) => void send(draft, thinkingLevel)}
               onStop={stop}
               streaming={runStatus !== "idle"}
-              knowledgeBaseCount={knowledgeBases.length}
+              knowledgeBaseCount={selectedKnowledgeBaseIds.length}
+              knowledgeBaseTotal={knowledgeBases.length}
+              onOpenKnowledgeBasePicker={() => setKnowledgeBasePickerOpen(true)}
               focusKey={focusKey}
+              webSearch={webSearchEnabled}
+              onWebSearchChange={setWebSearchEnabled}
             />
           </main>
 
@@ -715,6 +773,15 @@ export function ChatWorkspace() {
           </aside>
         </div>
       </div>
+
+      {knowledgeBasePickerOpen ? (
+        <KnowledgeBasePicker
+          options={knowledgeBases}
+          selectedIds={selectedKnowledgeBaseIds}
+          onApply={applyKnowledgeBases}
+          onClose={() => setKnowledgeBasePickerOpen(false)}
+        />
+      ) : null}
 
       {citationsOpen ? (
         <div className="fixed inset-0 z-50 xl:hidden">

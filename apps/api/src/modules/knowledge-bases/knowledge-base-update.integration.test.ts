@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { auditLogs, createDatabase, type Database, knowledgeBases, tenants } from "@pichat/db";
+import {
+  auditLogs,
+  createDatabase,
+  type Database,
+  departments,
+  knowledgeBases,
+  tenants,
+} from "@pichat/db";
 import type { SessionUser } from "@pichat/shared";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AccessControlService } from "../access-control/access-control.service";
+import type { ModelConfigsService } from "../model-configs/model-configs.service";
 import { KnowledgeBasesService } from "./knowledge-bases.service";
 
 const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip;
@@ -14,6 +22,7 @@ describeWithDatabase("knowledge base settings update", () => {
   const memberId = randomUUID();
   const knowledgeBaseId = randomUUID();
   const otherKnowledgeBaseId = randomUUID();
+  const departmentId = randomUUID();
 
   let db: Database;
   let service: KnowledgeBasesService;
@@ -24,7 +33,7 @@ describeWithDatabase("knowledge base settings update", () => {
     email: "settings-admin@test.local",
     displayName: "Settings Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const member: SessionUser = { ...admin, id: memberId, role: "member" };
 
@@ -36,9 +45,13 @@ describeWithDatabase("knowledge base settings update", () => {
       { createDataset: async () => ({ id: "ds", name: "ds", embeddingModel: "bge-m3" }) } as never,
       { cancelDocuments: async () => {} } as never,
       { get: () => "bge-m3" } as never,
+      { resolveOptionalForKind: async () => null } as unknown as ModelConfigsService,
     );
 
     await db.insert(tenants).values({ id: tenantId, name: "Settings", slug: tenantId });
+    await db
+      .insert(departments)
+      .values({ id: departmentId, tenantId, name: "Product", externalId: "dept-product" });
     await db.insert(knowledgeBases).values([
       {
         id: knowledgeBaseId,
@@ -93,6 +106,33 @@ describeWithDatabase("knowledge base settings update", () => {
       );
     expect(audit).toHaveLength(1);
     expect(audit[0]?.metadata).toMatchObject({ result: "success", name: "Policy 2026" });
+  });
+
+  it("sets and clears the owner department without changing ACL version", async () => {
+    const before = await db
+      .select({ aclVersion: knowledgeBases.aclVersion })
+      .from(knowledgeBases)
+      .where(eq(knowledgeBases.id, knowledgeBaseId))
+      .limit(1);
+
+    const updated = await service.update(knowledgeBaseId, admin, {
+      ownerDepartmentId: departmentId,
+    });
+    expect(updated.ownerDepartmentId).toBe(departmentId);
+
+    const after = await db
+      .select({ aclVersion: knowledgeBases.aclVersion })
+      .from(knowledgeBases)
+      .where(eq(knowledgeBases.id, knowledgeBaseId))
+      .limit(1);
+    expect(after[0]?.aclVersion).toBe(before[0]?.aclVersion);
+
+    await expect(
+      service.update(knowledgeBaseId, admin, { ownerDepartmentId: randomUUID() }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+
+    const cleared = await service.update(knowledgeBaseId, admin, { ownerDepartmentId: null });
+    expect(cleared.ownerDepartmentId).toBeNull();
   });
 
   it("rejects duplicate names and non-manager roles", async () => {

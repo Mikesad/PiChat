@@ -3,8 +3,7 @@ import type { Database } from "@pichat/db";
 import {
   authSessions,
   createDatabase,
-  groupMembers,
-  groups,
+  departments,
   hashPassword,
   tenants,
   users,
@@ -37,7 +36,7 @@ describeWithDatabase("MembersService", () => {
     email: "admin@test.local",
     displayName: "Admin",
     role: "tenant_admin",
-    groupIds: [],
+    departmentId: null,
   };
   const member: SessionUser = {
     id: memberId,
@@ -45,7 +44,15 @@ describeWithDatabase("MembersService", () => {
     email: "member@test.local",
     displayName: "Member",
     role: "member",
-    groupIds: [groupId],
+    departmentId: groupId,
+  };
+  const knowledgeAdmin: SessionUser = {
+    id: outsiderId,
+    tenantId,
+    email: "knowledge-admin@test.local",
+    displayName: "Knowledge Admin",
+    role: "knowledge_admin",
+    departmentId: groupId,
   };
 
   beforeAll(async () => {
@@ -55,6 +62,11 @@ describeWithDatabase("MembersService", () => {
     await db.insert(tenants).values([
       { id: tenantId, name: "Members", slug: tenantId },
       { id: otherTenantId, name: "Members Other", slug: otherTenantId },
+    ]);
+    await db.insert(departments).values([
+      { id: groupId, tenantId, name: "Support", externalId: "idp-support" },
+      { id: secondGroupId, tenantId, name: "Finance", externalId: "idp-finance" },
+      { id: foreignGroupId, tenantId: otherTenantId, name: "Foreign" },
     ]);
     await db.insert(users).values([
       {
@@ -80,6 +92,7 @@ describeWithDatabase("MembersService", () => {
         passwordHash: await hashPassword("123456"),
         displayName: "Member",
         role: "member",
+        departmentId: groupId,
       },
       {
         id: outsiderId,
@@ -88,16 +101,8 @@ describeWithDatabase("MembersService", () => {
         passwordHash: await hashPassword("123456"),
         displayName: "Outsider",
         role: "member",
+        departmentId: groupId,
       },
-    ]);
-    await db.insert(groups).values([
-      { id: groupId, tenantId, name: "Support", externalId: "idp-support" },
-      { id: secondGroupId, tenantId, name: "Finance", externalId: "idp-finance" },
-      { id: foreignGroupId, tenantId: otherTenantId, name: "Foreign" },
-    ]);
-    await db.insert(groupMembers).values([
-      { id: randomUUID(), groupId, userId: memberId },
-      { id: randomUUID(), groupId, userId: outsiderId },
     ]);
     await db.insert(authSessions).values([
       {
@@ -115,52 +120,100 @@ describeWithDatabase("MembersService", () => {
     await db.delete(tenants).where(eq(tenants.id, otherTenantId));
   });
 
-  it("lists members with groups and last active time", async () => {
+  it("lists members with departments and last active time", async () => {
     const result = await service.list(admin);
 
     expect(result.members).toHaveLength(4);
     expect(result.groups).toHaveLength(2);
+    expect(result.pagination).toMatchObject({
+      page: 1,
+      pageSize: 10,
+      total: 4,
+      totalPages: 1,
+    });
     const listed = result.members.find((item) => item.id === memberId);
-    expect(listed).toMatchObject({ role: "member", status: "active", groupIds: [groupId] });
+    expect(listed).toMatchObject({ role: "member", status: "active", departmentId: groupId });
     expect(listed?.lastActiveAt).not.toBeNull();
     const support = result.groups.find((item) => item.id === groupId);
     expect(support).toMatchObject({ memberCount: 2, externalId: "idp-support" });
   });
 
-  it("forbids members from viewing or editing the directory", async () => {
+  it("paginates the member list", async () => {
+    const first = await service.list(admin, { page: 1, pageSize: 10 });
+    expect(first.members).toHaveLength(4);
+    expect(first.pagination).toMatchObject({ page: 1, pageSize: 10, total: 4 });
+
+    const second = await service.list(admin, { page: 2, pageSize: 10 });
+    expect(second.members).toHaveLength(0);
+    expect(second.pagination).toMatchObject({
+      page: 2,
+      pageSize: 10,
+      total: 4,
+      totalPages: 1,
+      hasPrevious: true,
+    });
+  });
+
+  it("lists a lean directory for any authenticated member", async () => {
+    const directory = await service.directory(knowledgeAdmin);
+
+    expect(directory.members).toHaveLength(4);
+    expect(directory.members[0]).not.toHaveProperty("email");
+    expect(directory.members.find((item) => item.id === memberId)).toMatchObject({
+      displayName: "Member",
+      role: "member",
+      status: "active",
+      departmentId: groupId,
+    });
+    expect(directory.groups.find((item) => item.id === groupId)).toMatchObject({
+      name: "Support",
+      memberCount: 2,
+    });
+    expect(directory.groups.some((item) => item.id === foreignGroupId)).toBe(false);
+    await expect(service.directory(member)).resolves.toMatchObject({ groups: expect.any(Array) });
+    await expect(service.list(knowledgeAdmin)).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("forbids members from viewing or editing the member list", async () => {
     await expect(service.list(member)).rejects.toMatchObject({ code: "forbidden" });
     await expect(
       service.update(memberId, member, { role: "knowledge_admin" }),
     ).rejects.toMatchObject({ code: "forbidden" });
   });
 
-  it("updates role, status and group memberships", async () => {
+  it("updates role, status and department", async () => {
     const updated = await service.update(outsiderId, admin, {
       role: "knowledge_admin",
       status: "disabled",
-      groupIds: [secondGroupId],
+      departmentId: secondGroupId,
     });
 
     expect(updated).toMatchObject({
       role: "knowledge_admin",
       status: "disabled",
-      groupIds: [secondGroupId],
+      departmentId: secondGroupId,
     });
   });
 
-  it("updates group memberships without touching role or status", async () => {
-    const updated = await service.update(memberId, admin, { groupIds: [groupId, secondGroupId] });
+  it("updates the department without touching role or status", async () => {
+    const updated = await service.update(memberId, admin, { departmentId: secondGroupId });
 
     expect(updated).toMatchObject({
       role: "member",
       status: "active",
-      groupIds: [groupId, secondGroupId].sort(),
+      departmentId: secondGroupId,
     });
   });
 
-  it("rejects group ids outside the tenant", async () => {
+  it("clears the department", async () => {
+    const updated = await service.update(memberId, admin, { departmentId: null });
+
+    expect(updated).toMatchObject({ departmentId: null });
+  });
+
+  it("rejects department ids outside the tenant", async () => {
     await expect(
-      service.update(outsiderId, admin, { groupIds: [foreignGroupId] }),
+      service.update(outsiderId, admin, { departmentId: foreignGroupId }),
     ).rejects.toMatchObject({ code: "invalid_request" });
   });
 

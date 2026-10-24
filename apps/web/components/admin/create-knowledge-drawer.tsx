@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { type AclSubject, subjectKey, subjectName } from "@/lib/admin-data";
+import { useEffect, useState } from "react";
+import { type AclSubject, subjectKey } from "@/lib/admin-data";
 import { apiErrorMessage } from "@/lib/api-client";
 import { Icon } from "../icons";
+import { useModelConfig } from "../model-config/model-config-provider";
 import { SubjectSelect } from "./acl";
 import { useAdminData } from "./admin-data";
+import { useDirectory } from "./directory";
 import { Drawer } from "./drawer";
 import { useToast } from "./toast";
-import { Button, FormField, InfoBanner, inputClass, textareaClass } from "./ui";
+import { Button, FormField, InfoBanner, inputClass, selectClass, textareaClass } from "./ui";
 
 export function CreateKnowledgeDrawer({
   onClose,
@@ -18,16 +20,28 @@ export function CreateKnowledgeDrawer({
   onCreated: (knowledgeBaseId: string) => void;
 }) {
   const { createKnowledgeBase, setDefaultSubjects: saveDefaultSubjects } = useAdminData();
+  const { subjectName } = useDirectory();
+  const { embeddingConfigs } = useModelConfig();
   const { showToast } = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [embeddingConfigId, setEmbeddingConfigId] = useState("");
   const [defaultSubjects, setDefaultSubjects] = useState<AclSubject[]>([]);
   const [subjectValue, setSubjectValue] = useState("");
   const [subjectError, setSubjectError] = useState<string | null>(null);
   const [errors, setErrors] = useState<{ name?: string }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (embeddingConfigId || embeddingConfigs.length === 0) {
+      return;
+    }
+    const preferred = embeddingConfigs.find((config) => config.isDefault) ?? embeddingConfigs[0];
+    if (preferred) {
+      setEmbeddingConfigId(preferred.id);
+    }
+  }, [embeddingConfigId, embeddingConfigs]);
 
   function parseSubject(value: string): AclSubject | null {
     const [type, id] = value.split(":");
@@ -40,7 +54,7 @@ export function CreateKnowledgeDrawer({
   function addSubject() {
     const subject = parseSubject(subjectValue);
     if (!subject) {
-      setSubjectError("请选择用户或用户组");
+      setSubjectError("请选择用户或部门");
       return;
     }
     if (defaultSubjects.some((item) => subjectKey(item) === subjectKey(subject))) {
@@ -68,7 +82,7 @@ export function CreateKnowledgeDrawer({
       const knowledgeBase = await createKnowledgeBase({
         name: name.trim(),
         description: description.trim() || undefined,
-        embeddingModel: embeddingModel.trim() || undefined,
+        embeddingConfigId: embeddingConfigId || undefined,
       });
 
       if (defaultSubjects.length > 0) {
@@ -139,30 +153,33 @@ export function CreateKnowledgeDrawer({
         <FormField
           id="kb-embedding"
           label="Embedding 模型"
-          hint="留空使用服务端默认模型（RAGFLOW_DEFAULT_EMBEDDING_MODEL）。每个知识库固定一个模型和维度，创建后不可更改。"
+          hint={
+            embeddingConfigs.length > 0
+              ? "选项来自管理端「模型配置」中保存的 Embedding 配置。每个知识库固定一个模型和维度，创建后不可更改。"
+              : "还没有 Embedding 配置，将使用服务端默认模型。可先在管理端「模型配置」中添加 SiliconFlow Embedding。"
+          }
         >
-          <input
+          <select
             id="kb-embedding"
-            value={embeddingModel}
-            onChange={(event) => setEmbeddingModel(event.target.value)}
-            placeholder="例如：BAAI/bge-large-zh-v1.5@SILICONFLOW"
-            className={`${inputClass} font-mono`}
-          />
+            value={embeddingConfigId}
+            onChange={(event) => setEmbeddingConfigId(event.target.value)}
+            className={selectClass}
+            disabled={embeddingConfigs.length === 0}
+          >
+            <option value="">服务端默认模型</option>
+            {embeddingConfigs.map((config) => (
+              <option key={config.id} value={config.id}>
+                {config.displayName} · {config.modelId}
+              </option>
+            ))}
+          </select>
         </FormField>
-
-        <InfoBanner tone="neutral" icon="database" title="RAGFlow 数据集由服务端创建">
-          RAGFlow API Key 只保存在服务端。创建失败时不会写入半成品知识库，可直接重试。
-        </InfoBanner>
 
         {submitError ? (
           <InfoBanner tone="danger" icon="alert-circle" title="创建失败">
             {submitError}
           </InfoBanner>
         ) : null}
-
-        <InfoBanner tone="warning" icon="alert-circle" title="创建后锁定">
-          Embedding 模型创建后不可更改。更换模型需要新建知识库并重新解析全部文档。
-        </InfoBanner>
 
         <section>
           <div className="flex items-center justify-between gap-2">
@@ -179,7 +196,7 @@ export function CreateKnowledgeDrawer({
                 setSubjectValue(value);
                 setSubjectError(null);
               }}
-              label="选择默认访问范围的用户或用户组"
+              label="选择默认访问范围的用户或部门"
             />
             <Button variant="secondary" onClick={addSubject}>
               <Icon name="plus" size={14} />

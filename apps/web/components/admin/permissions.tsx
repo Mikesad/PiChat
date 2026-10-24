@@ -1,5 +1,6 @@
 "use client";
 
+import { defaultPageSize, type PaginationMeta } from "@pichat/shared";
 import { useId, useMemo, useState } from "react";
 import type { AdminDocument, AdminKnowledgeBase } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
@@ -7,6 +8,8 @@ import { useAuth } from "../auth/auth-provider";
 import { Icon, Spinner } from "../icons";
 import { BulkAclDrawer, DocumentAclDrawer } from "./acl";
 import { useAdminData } from "./admin-data";
+import { useDirectory } from "./directory";
+import { Pagination } from "./pagination";
 import {
   Badge,
   Button,
@@ -26,8 +29,44 @@ import {
 } from "./ui";
 
 type StatusFilter = "all" | "ready" | "parsing" | "failed";
-type SortKey = "title" | "updated" | "access";
+type SortKey = "title" | "updated";
 type SortDirection = "asc" | "desc";
+
+type FileTypeTone = "danger" | "accent" | "warning" | "neutral" | "outline";
+
+interface FileTypeMeta {
+  label: string;
+  tone: FileTypeTone;
+}
+
+const fileTypeByExtension: Record<string, FileTypeMeta> = {
+  pdf: { label: "PDF", tone: "danger" },
+  docx: { label: "DOCX", tone: "accent" },
+  doc: { label: "DOC", tone: "accent" },
+  md: { label: "MD", tone: "warning" },
+  markdown: { label: "MD", tone: "warning" },
+  txt: { label: "TXT", tone: "neutral" },
+};
+
+const fileTypeByMime: Record<string, FileTypeMeta> = {
+  "application/pdf": { label: "PDF", tone: "danger" },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    label: "DOCX",
+    tone: "accent",
+  },
+  "text/markdown": { label: "MD", tone: "warning" },
+  "text/plain": { label: "TXT", tone: "neutral" },
+};
+
+function documentFileType(document: AdminDocument): FileTypeMeta {
+  const extension = document.title.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const byExtension = extension ? fileTypeByExtension[extension] : undefined;
+  if (byExtension) {
+    return byExtension;
+  }
+  const byMime = document.mimeType ? fileTypeByMime[document.mimeType] : undefined;
+  return byMime ?? { label: "其他", tone: "outline" };
+}
 
 const statusFilters: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部状态" },
@@ -44,6 +83,7 @@ interface PermissionRow {
 
 export function PermissionsPage() {
   const { knowledgeBases, status, error, reload } = useAdminData();
+  const { groups } = useDirectory();
   const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [knowledgeBaseFilter, setKnowledgeBaseFilter] = useState("all");
@@ -55,8 +95,22 @@ export function PermissionsPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aclDocumentId, setAclDocumentId] = useState<string | null>(null);
   const [bulkAclOpen, setBulkAclOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
   const kbSelectId = useId();
   const canManage = user?.role === "tenant_admin" || user?.role === "knowledge_admin";
+
+  const departmentNameById = useMemo(
+    () => new Map(groups.map((group) => [group.id, group.name] as const)),
+    [groups],
+  );
+
+  function departmentName(knowledgeBase: AdminKnowledgeBase): string | null {
+    if (!knowledgeBase.ownerDepartmentId) {
+      return null;
+    }
+    return departmentNameById.get(knowledgeBase.ownerDepartmentId) ?? "未知部门";
+  }
 
   const rows = useMemo<PermissionRow[]>(
     () =>
@@ -102,10 +156,7 @@ export function PermissionsPage() {
       if (sortKey === "title") {
         return left.document.title.localeCompare(right.document.title, "zh-CN");
       }
-      if (sortKey === "updated") {
-        return left.document.updatedAt.localeCompare(right.document.updatedAt);
-      }
-      return left.document.effectiveReaderCount - right.document.effectiveReaderCount;
+      return left.document.updatedAt.localeCompare(right.document.updatedAt);
     });
 
     return sortDirection === "asc" ? sorted : sorted.reverse();
@@ -120,13 +171,31 @@ export function PermissionsPage() {
     sortDirection,
   ]);
 
+  const pagination: PaginationMeta = useMemo(() => {
+    const totalPages = filteredRows.length === 0 ? 0 : Math.ceil(filteredRows.length / pageSize);
+    const currentPage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+    return {
+      page: currentPage,
+      pageSize,
+      total: filteredRows.length,
+      totalPages,
+      hasNext: currentPage < totalPages,
+      hasPrevious: currentPage > 1,
+    };
+  }, [filteredRows.length, page, pageSize]);
+
+  const pagedRows = useMemo(() => {
+    const offset = (pagination.page - 1) * pageSize;
+    return filteredRows.slice(offset, offset + pageSize);
+  }, [filteredRows, pageSize, pagination.page]);
+
   const totals = useMemo(() => {
     const noAccess = rows.filter((row) => row.document.effectiveReaderCount === 0).length;
     const withDeny = rows.filter((row) => row.denyCount > 0).length;
     return { noAccess, withDeny, documents: rows.length, knowledgeBases: knowledgeBases.length };
   }, [rows, knowledgeBases.length]);
 
-  const visibleIds = filteredRows.map((row) => row.document.id);
+  const visibleIds = pagedRows.map((row) => row.document.id);
   const selectedKnowledgeBaseIds = [
     ...new Set(
       rows
@@ -153,6 +222,7 @@ export function PermissionsPage() {
     setOnlyNoAccess(false);
     setOnlyDeny(false);
     setSelectedIds([]);
+    setPage(1);
   }
 
   function handleSort(next: SortKey) {
@@ -271,16 +341,13 @@ export function PermissionsPage() {
         ]}
       />
 
-      <InfoBanner tone="accent" icon="info" title="有效人数由服务端计算">
-        服务端按本租户活跃用户、知识库默认范围与文档例外计算有效读者，角色覆盖也计入。修改权限后会重新拉取数据。
-      </InfoBanner>
-
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput
           value={query}
           onChange={(value) => {
             setQuery(value);
             setSelectedIds([]);
+            setPage(1);
           }}
           placeholder="搜索文档或知识库"
           label="搜索文档或知识库"
@@ -295,6 +362,7 @@ export function PermissionsPage() {
             onChange={(event) => {
               setKnowledgeBaseFilter(event.target.value);
               setSelectedIds([]);
+              setPage(1);
             }}
             className="h-10 w-full cursor-pointer rounded-lg border border-border bg-surface px-2.5 text-sm text-fg transition-colors focus:border-accent sm:h-9"
           >
@@ -314,6 +382,7 @@ export function PermissionsPage() {
               onClick={() => {
                 setStatusFilter(filter.id);
                 setSelectedIds([]);
+                setPage(1);
               }}
             >
               {filter.label}
@@ -325,6 +394,7 @@ export function PermissionsPage() {
           onClick={() => {
             setOnlyNoAccess((previous) => !previous);
             setSelectedIds([]);
+            setPage(1);
           }}
         >
           仅看无人可访问
@@ -334,6 +404,7 @@ export function PermissionsPage() {
           onClick={() => {
             setOnlyDeny((previous) => !previous);
             setSelectedIds([]);
+            setPage(1);
           }}
         >
           仅看有拒绝
@@ -376,7 +447,8 @@ export function PermissionsPage() {
               footer={
                 <>
                   <span>
-                    共 {filteredRows.length} 篇 · 已选 {selectedIds.length} 篇
+                    当前页 {pagedRows.length} 篇 · 共 {filteredRows.length} 篇 · 已选{" "}
+                    {selectedIds.length} 篇
                   </span>
                   <span>拒绝优先于允许</span>
                 </>
@@ -401,14 +473,8 @@ export function PermissionsPage() {
                   />
                   <th className={thClass}>知识库</th>
                   <th className={thClass}>状态</th>
-                  <SortableHeader
-                    label="可见人数"
-                    column="access"
-                    sortKey={sortKey}
-                    sortDirection={sortDirection}
-                    onSort={handleSort}
-                  />
-                  <th className={thClass}>例外</th>
+                  <th className={thClass}>类型</th>
+                  <th className={thClass}>部门</th>
                   <SortableHeader
                     label="更新"
                     column="updated"
@@ -423,7 +489,7 @@ export function PermissionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => (
+                {pagedRows.map((row) => (
                   <tr
                     key={row.document.id}
                     className={cn(
@@ -443,21 +509,36 @@ export function PermissionsPage() {
                       ) : null}
                     </td>
                     <td className={tdClass}>
-                      {row.document.canManageAcl ? (
-                        <button
-                          type="button"
-                          onClick={() => openAcl(row.document)}
-                          className="max-w-[320px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
-                        >
-                          {row.document.title}
-                        </button>
-                      ) : (
-                        <span className="block max-w-[320px] truncate text-sm font-medium text-fg">
-                          {row.document.title}
-                        </span>
-                      )}
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {row.document.canManageAcl ? (
+                          <button
+                            type="button"
+                            onClick={() => openAcl(row.document)}
+                            className="max-w-[320px] cursor-pointer truncate text-left text-sm font-medium text-fg transition-colors hover:text-accent-text"
+                          >
+                            {row.document.title}
+                          </button>
+                        ) : (
+                          <span className="block max-w-[320px] truncate text-sm font-medium text-fg">
+                            {row.document.title}
+                          </span>
+                        )}
+                        {row.document.canRead ? null : (
+                          <Badge tone="warning" className="shrink-0">
+                            <Icon name="lock" size={10} />
+                            无权限
+                          </Badge>
+                        )}
+                        {row.document.aclMode === "restricted" ? (
+                          <Badge tone="accent" className="shrink-0">
+                            独立授权
+                          </Badge>
+                        ) : null}
+                      </div>
                       <p className="mt-0.5 text-[11px] text-subtle">
-                        {row.document.sizeLabel ?? "—"} · {row.document.updatedLabel}
+                        {row.document.canRead
+                          ? `${row.document.sizeLabel ?? "—"} · ${row.document.updatedLabel}`
+                          : "联系管理员申请阅读权限"}
                       </p>
                     </td>
                     <td className={tdClass}>
@@ -469,29 +550,15 @@ export function PermissionsPage() {
                       <StatusBadge status={row.document.status} />
                     </td>
                     <td className={tdClass}>
-                      {row.document.effectiveReaderCount === 0 ? (
-                        <Badge tone="warning">无人可访问</Badge>
-                      ) : (
-                        <>
-                          <p className="text-sm tabular-nums text-fg">
-                            {row.document.effectiveReaderCount} 人
-                          </p>
-                          <p className="mt-0.5 text-[11px] text-subtle">服务端有效人数</p>
-                        </>
-                      )}
+                      <FileTypeBadge document={row.document} />
                     </td>
                     <td className={tdClass}>
-                      {row.document.exceptions.length === 0 ? (
-                        <span className="text-xs text-subtle">—</span>
+                      {departmentName(row.knowledgeBase) ? (
+                        <p className="max-w-[120px] truncate text-xs text-muted">
+                          {departmentName(row.knowledgeBase)}
+                        </p>
                       ) : (
-                        <>
-                          <p className="text-sm tabular-nums text-fg">
-                            {row.document.exceptions.length} 条
-                          </p>
-                          {row.denyCount > 0 ? (
-                            <p className="mt-0.5 text-[11px] text-danger">{row.denyCount} 条拒绝</p>
-                          ) : null}
-                        </>
+                        <span className="text-xs text-subtle">未设置</span>
                       )}
                     </td>
                     <td className={`${tdClass} hidden xl:table-cell`}>
@@ -528,7 +595,7 @@ export function PermissionsPage() {
                 {selectedIds.length > 0 ? `已选 ${selectedIds.length} 篇` : ""}
               </span>
             </li>
-            {filteredRows.map((row) => (
+            {pagedRows.map((row) => (
               <li
                 key={row.document.id}
                 className="rounded-xl border border-border bg-surface p-3.5"
@@ -547,33 +614,47 @@ export function PermissionsPage() {
                     <Icon name="file-text" size={15} />
                   </span>
                   <div className="min-w-0 flex-1">
-                    {row.document.canManageAcl ? (
-                      <button
-                        type="button"
-                        onClick={() => openAcl(row.document)}
-                        className="block w-full cursor-pointer truncate text-left text-sm font-medium text-fg"
-                      >
-                        {row.document.title}
-                      </button>
-                    ) : (
-                      <p className="truncate text-sm font-medium text-fg">{row.document.title}</p>
-                    )}
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      {row.document.canManageAcl ? (
+                        <button
+                          type="button"
+                          onClick={() => openAcl(row.document)}
+                          className="block w-full cursor-pointer truncate text-left text-sm font-medium text-fg"
+                        >
+                          {row.document.title}
+                        </button>
+                      ) : (
+                        <p className="truncate text-sm font-medium text-fg">{row.document.title}</p>
+                      )}
+                      {row.document.canRead ? null : (
+                        <Badge tone="warning" className="shrink-0">
+                          <Icon name="lock" size={10} />
+                          无权限
+                        </Badge>
+                      )}
+                      {row.document.aclMode === "restricted" ? (
+                        <Badge tone="accent" className="shrink-0">
+                          独立授权
+                        </Badge>
+                      ) : null}
+                    </div>
                     <p className="mt-0.5 truncate text-[11px] text-subtle">
-                      {row.knowledgeBase.name} · {row.document.updatedLabel}
+                      {row.knowledgeBase.name} ·{" "}
+                      {row.document.canRead ? row.document.updatedLabel : "联系管理员申请阅读权限"}
                     </p>
                   </div>
                   <StatusBadge status={row.document.status} />
                 </div>
                 <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
+                  <FileTypeBadge document={row.document} />
                   {row.document.effectiveReaderCount === 0 ? (
                     <Badge tone="warning">无人可访问</Badge>
-                  ) : (
-                    <span className="text-fg">{row.document.effectiveReaderCount} 人可读</span>
-                  )}
-                  <span>{row.document.exceptions.length} 条例外</span>
-                  {row.denyCount > 0 ? (
-                    <span className="text-danger">{row.denyCount} 条拒绝</span>
                   ) : null}
+                  <span>
+                    {departmentName(row.knowledgeBase)
+                      ? `部门：${departmentName(row.knowledgeBase)}`
+                      : "部门未设置"}
+                  </span>
                 </div>
                 {row.document.canManageAcl ? (
                   <div className="mt-3">
@@ -588,6 +669,19 @@ export function PermissionsPage() {
               </li>
             ))}
           </ul>
+
+          <Pagination
+            pagination={pagination}
+            onPageChange={(next) => {
+              setPage(next);
+              setSelectedIds([]);
+            }}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+              setSelectedIds([]);
+            }}
+          />
         </>
       )}
 
@@ -635,6 +729,15 @@ export function PermissionsPage() {
         <div aria-hidden="true" className="h-16 sm:h-20" />
       ) : null}
     </div>
+  );
+}
+
+function FileTypeBadge({ document }: { document: AdminDocument }) {
+  const meta = documentFileType(document);
+  return (
+    <Badge tone={meta.tone} className="justify-center px-1.5 font-semibold tracking-wide">
+      {meta.label}
+    </Badge>
   );
 }
 

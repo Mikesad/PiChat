@@ -20,7 +20,7 @@ describeWithDatabase("model configs service", () => {
     email: "model-a@test.local",
     displayName: "Model A",
     role: "member",
-    groupIds: [],
+    departmentId: null,
   };
   const userB: SessionUser = {
     id: userBId,
@@ -28,7 +28,7 @@ describeWithDatabase("model configs service", () => {
     email: "model-b@test.local",
     displayName: "Model B",
     role: "member",
-    groupIds: [],
+    departmentId: null,
   };
 
   let db: Database;
@@ -69,6 +69,7 @@ describeWithDatabase("model configs service", () => {
 
   it("creates encrypted configs, masks keys and keeps one default per user", async () => {
     const first = await service.create(userA, {
+      kind: "chat",
       provider: "opencode-go",
       modelId: "deepseek-v4.1-flash",
       displayName: "Flash",
@@ -79,6 +80,7 @@ describeWithDatabase("model configs service", () => {
     firstId = first.id;
 
     const second = await service.create(userA, {
+      kind: "chat",
       provider: "deepseek",
       modelId: "deepseek-chat",
       displayName: "DeepSeek Chat",
@@ -110,6 +112,7 @@ describeWithDatabase("model configs service", () => {
   it("rejects duplicate provider/model pairs", async () => {
     await expect(
       service.create(userA, {
+        kind: "chat",
         provider: "deepseek",
         modelId: "deepseek-chat",
         displayName: "Duplicate",
@@ -127,6 +130,7 @@ describeWithDatabase("model configs service", () => {
       .then((rows) => rows[0]);
 
     const updated = await service.update(userA, firstId, {
+      kind: "chat",
       provider: "opencode-go",
       modelId: "deepseek-v4.1-flash",
       displayName: "Flash renamed",
@@ -148,6 +152,7 @@ describeWithDatabase("model configs service", () => {
 
     await expect(
       service.update(userB, firstId, {
+        kind: "chat",
         provider: "opencode-go",
         modelId: "deepseek-v4.1-flash",
         displayName: "Hijack",
@@ -160,15 +165,40 @@ describeWithDatabase("model configs service", () => {
     await expect(service.remove(userB, firstId)).rejects.toMatchObject({ code: "not_found" });
   });
 
+  it("keeps defaults per kind and only resolves chat configs for runs", async () => {
+    const embedding = await service.create(userA, {
+      kind: "embedding",
+      provider: "siliconflow",
+      modelId: "BAAI/bge-m3@SILICONFLOW",
+      displayName: "BGE-M3",
+      baseUrl: "https://api.siliconflow.cn/v1",
+      apiKey: "sk-sf-embedding",
+      makeDefault: true,
+    });
+
+    const embeddingList = await service.list(userA, "embedding");
+    expect(embeddingList.map((config) => config.id)).toEqual([embedding.id]);
+    expect(embeddingList[0]?.isDefault).toBe(true);
+
+    const chatList = await service.list(userA, "chat");
+    expect(chatList.some((config) => config.id === embedding.id)).toBe(false);
+
+    await expect(service.resolveForRun(userA)).resolves.toMatchObject({
+      id: secondId,
+      provider: "deepseek",
+    });
+    expect(await service.findActiveModelId(userA, "embedding")).toBe("BAAI/bge-m3@SILICONFLOW");
+  });
+
   it("sets a single default and deletes owned configs", async () => {
     const updated = await service.setDefault(userA, firstId);
     expect(updated.isDefault).toBe(true);
 
-    const list = await service.list(userA);
+    const list = await service.list(userA, "chat");
     expect(list.filter((config) => config.isDefault).map((config) => config.id)).toEqual([firstId]);
 
     await service.remove(userA, secondId);
-    expect((await service.list(userA)).map((config) => config.id)).toEqual([firstId]);
+    expect((await service.list(userA, "chat")).map((config) => config.id)).toEqual([firstId]);
     await expect(service.remove(userA, secondId)).rejects.toMatchObject({ code: "not_found" });
   });
 });

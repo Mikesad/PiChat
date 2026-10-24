@@ -91,7 +91,7 @@ Remove-Item Env:NODE_OPTIONS
 
 1. **组数量 5 vs 6**：mock 的 `users` 中张明、刘洋引用 `g-platform`，但 mock `groups`
    只有 5 个且没有 `g-platform`。为满足外键和契约要求的张明 `groupIds=["g-all","g-platform"]`，
-   seed 新增了 `g-platform`（平台组，`externalId=idp-platform`），因此实际是 **6 个组**。
+   seed 新增了 `g-platform`（平台部，`externalId=idp-platform`），因此实际是 **6 个部门**。
    如果坚持 5 个组，需要决定：删除用户上的 `g-platform`，或把它并入现有组。
 2. **SessionUser 形状**：`packages/shared/src/api.ts` 原实现是 `SessionUser extends Principal`，
    字段为 `userId`；契约第 2 节要求 `id`。已按契约改为

@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import type { ChatRunRequest, ThinkingLevel, UserRole } from "@pichat/shared";
+import type { ChatRunRequest, ThinkingLevel } from "@pichat/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AccessClient } from "./clients/access-client.js";
@@ -17,18 +17,9 @@ const thinkingLevelSchema = z.enum([
   "xhigh",
 ]) satisfies z.ZodType<ThinkingLevel>;
 
-const roleSchema = z.enum([
-  "member",
-  "knowledge_admin",
-  "security_admin",
-  "tenant_admin",
-]) satisfies z.ZodType<UserRole>;
-
 const principalSchema = z.object({
   tenantId: z.string().min(1).max(64),
   userId: z.string().min(1).max(64),
-  role: roleSchema,
-  groupIds: z.array(z.string().min(1).max(64)).max(200),
 });
 
 const runRequestSchema = z.object({
@@ -57,6 +48,23 @@ const runRequestSchema = z.object({
     )
     .max(40),
   prompt: z.string().trim().min(1).max(20_000),
+  webSearch: z.boolean().default(false),
+  knowledgeBaseIds: z.array(z.string().min(1).max(64)).max(50).optional(),
+  webSearchConfig: z
+    .object({
+      provider: z.enum(["tavily", "bocha"]),
+      apiKey: z.string().max(4096),
+      proxy: z
+        .string()
+        .max(512)
+        .refine(
+          (value) =>
+            value.length === 0 || /^(https?|socks4|socks4a|socks5|socks5h):\/\//i.test(value),
+          "proxy must be a valid proxy URL",
+        )
+        .optional(),
+    })
+    .optional(),
 });
 
 export interface RuntimeAppOptions {
@@ -120,7 +128,7 @@ export async function buildRuntimeApp(options: RuntimeAppOptions = {}): Promise<
   app.get("/internal/runtime", async () => ({
     service: "pichat-agent-runtime",
     piPackage: "@earendil-works/pi-coding-agent",
-    tools: ["kb.search", "kb.read"],
+    tools: ["kb.search", "kb.read", "kb.list", "kb.read_around", "kb.find", "kb.outline"],
     storage: "jsonl",
   }));
 

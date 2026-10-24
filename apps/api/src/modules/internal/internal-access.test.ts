@@ -2,19 +2,21 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "@pichat/db";
 import {
   createDatabase,
+  departments,
   documentAcls,
   documents,
-  groupMembers,
-  groups,
   knowledgeBaseAcls,
   knowledgeBases,
+  modelConfigs,
   tenants,
   users,
 } from "@pichat/db";
 import type { InternalPrincipal } from "@pichat/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ModelConfigCrypto } from "../../common/model-config-crypto";
 import { AccessControlService } from "../access-control/access-control.service";
+import { ModelConfigsService } from "../model-configs/model-configs.service";
 import { InternalAccessService } from "./internal-access.service";
 
 const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip;
@@ -37,24 +39,25 @@ describeWithDatabase("InternalAccessService", () => {
   const admin: InternalPrincipal = {
     tenantId,
     userId: adminId,
-    role: "tenant_admin",
-    groupIds: [],
   };
   const member: InternalPrincipal = {
     tenantId,
     userId: memberId,
-    role: "member",
-    groupIds: [groupId],
   };
 
   beforeAll(async () => {
     db = createDatabase(process.env.DATABASE_URL as string);
-    service = new InternalAccessService(db, new AccessControlService(db));
+    service = new InternalAccessService(
+      db,
+      new AccessControlService(db),
+      new ModelConfigsService(db, new ModelConfigCrypto(Buffer.alloc(32, 4))),
+    );
 
     await db.insert(tenants).values([
       { id: tenantId, name: "Internal Access", slug: tenantId },
       { id: otherTenantId, name: "Internal Other", slug: otherTenantId },
     ]);
+    await db.insert(departments).values({ id: groupId, tenantId, name: "Support" });
     await db.insert(users).values([
       {
         id: adminId,
@@ -71,10 +74,9 @@ describeWithDatabase("InternalAccessService", () => {
         passwordHash: "scrypt$00$00",
         displayName: "Member",
         role: "member",
+        departmentId: groupId,
       },
     ]);
-    await db.insert(groups).values({ id: groupId, tenantId, name: "Support" });
-    await db.insert(groupMembers).values({ id: randomUUID(), groupId, userId: memberId });
 
     await db.insert(knowledgeBases).values({
       id: knowledgeBaseId,
@@ -168,9 +170,61 @@ describeWithDatabase("InternalAccessService", () => {
     expect(ids).toEqual([docAllowed, docDenied]);
   });
 
+  it("returns no scope for an explicitly empty knowledge-base selection", async () => {
+    await expect(service.scope(member, [])).resolves.toEqual({ knowledgeBases: [] });
+  });
+
   it("re-checks current document access", async () => {
     await expect(service.check(member, docAllowed)).resolves.toMatchObject({ allowed: true });
     await expect(service.check(member, docDenied)).resolves.toMatchObject({ allowed: false });
     await expect(service.check(member, randomUUID())).resolves.toMatchObject({ allowed: false });
+  });
+
+  it("re-resolves the current department instead of trusting the caller", async () => {
+    await db.update(users).set({ departmentId: null }).where(eq(users.id, memberId));
+    await expect(service.scope(member, [knowledgeBaseId])).resolves.toEqual({ knowledgeBases: [] });
+    await expect(service.check(member, docAllowed)).resolves.toMatchObject({ allowed: false });
+
+    await db.update(users).set({ departmentId: groupId }).where(eq(users.id, memberId));
+    await expect(service.check(member, docAllowed)).resolves.toMatchObject({ allowed: true });
+  });
+
+  it("denies access as soon as the account is disabled", async () => {
+    await db.update(users).set({ status: "disabled" }).where(eq(users.id, memberId));
+    await expect(service.scope(member, [knowledgeBaseId])).resolves.toEqual({ knowledgeBases: [] });
+    await expect(service.check(member, docAllowed)).resolves.toMatchObject({ allowed: false });
+
+    await db.update(users).set({ status: "active" }).where(eq(users.id, memberId));
+    await expect(service.check(member, docAllowed)).resolves.toMatchObject({ allowed: true });
+  });
+
+  it("denies users from another tenant", async () => {
+    const foreign: InternalPrincipal = { tenantId: otherTenantId, userId: memberId };
+    await expect(service.scope(foreign, [knowledgeBaseId])).resolves.toEqual({
+      knowledgeBases: [],
+    });
+    await expect(service.check(foreign, docAllowed)).resolves.toMatchObject({ allowed: false });
+  });
+
+  it("adds the active rerank model to retrieval settings", async () => {
+    await db.insert(modelConfigs).values({
+      id: randomUUID(),
+      tenantId,
+      userId: memberId,
+      kind: "rerank",
+      provider: "siliconflow",
+      modelId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+      displayName: "BGE Reranker",
+      encryptedApiKey: null,
+      isDefault: true,
+    });
+
+    const result = await service.scope(member, [knowledgeBaseId]);
+    expect(result.knowledgeBases[0]?.retrieval).toMatchObject({
+      topK: 9,
+      similarityThreshold: 0.4,
+      vectorWeight: 0.7,
+      rerankModelId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+    });
   });
 });

@@ -6,6 +6,7 @@ import type {
   RunEndData,
 } from "@pichat/shared";
 import { emptyChatUsage, resolveCitationUsage } from "@pichat/shared";
+import { DocumentRegistry } from "../tools/document-registry.js";
 import { CitationRegistry } from "./citation-registry.js";
 
 export interface ToolStartInput {
@@ -28,6 +29,7 @@ export class RunState {
   readonly sessionId: string;
   readonly assistantMessageId: string;
   readonly citations: CitationRegistry;
+  readonly documents = new DocumentRegistry();
   readonly tools = new Map<string, ChatToolCall>();
   content = "";
   thinking = "";

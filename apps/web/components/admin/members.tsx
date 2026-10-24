@@ -1,6 +1,6 @@
 "use client";
 
-import type { MemberSummary } from "@pichat/shared";
+import { defaultPageSize, type MemberSummary, type PaginationMeta } from "@pichat/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AdminGroup,
@@ -21,14 +21,15 @@ import {
 import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
+import { useDirectory } from "./directory";
 import { Drawer } from "./drawer";
+import { Pagination } from "./pagination";
 import { Tabs } from "./tabs";
 import {
   Badge,
   Button,
   EmptyState,
   FilterChip,
-  InfoBanner,
   LinkButton,
   PageHeader,
   SearchInput,
@@ -54,7 +55,7 @@ function toAdminUser(member: MemberSummary): AdminUser {
     name: member.displayName,
     email: member.email,
     role: member.role,
-    groupIds: member.groupIds,
+    departmentId: member.departmentId,
     status: member.status,
     lastActiveAt: member.lastActiveAt,
   };
@@ -78,6 +79,7 @@ function formatLastActive(value: string | null | undefined): string {
 
 export function MembersPage() {
   const { knowledgeBases } = useAdminData();
+  const { reload: reloadSubjects } = useDirectory();
   const { user: currentUser, logout } = useAuth();
   const [members, setMembers] = useState<AdminUser[]>([]);
   const [groups, setGroups] = useState<AdminGroup[]>([]);
@@ -89,13 +91,17 @@ export function MembersPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "disabled">("all");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
+  const [total, setTotal] = useState(0);
 
   const reloadDirectory = useCallback(async () => {
     setDirectoryStatus((current) => (current === "ready" ? "ready" : "loading"));
     setDirectoryError(null);
     try {
-      const response = await fetchMembers();
+      const response = await fetchMembers({ page, pageSize });
       setMembers(response.members.map(toAdminUser));
+      setTotal(response.pagination.total);
       setGroups(
         response.groups.map((group) => ({
           id: group.id,
@@ -111,11 +117,16 @@ export function MembersPage() {
       setDirectoryError(apiErrorMessage(cause));
       setDirectoryStatus("error");
     }
-  }, [logout]);
+  }, [logout, page, pageSize]);
 
   useEffect(() => {
     void reloadDirectory();
   }, [reloadDirectory]);
+
+  const handleMemberUpdated = useCallback(async () => {
+    await reloadDirectory();
+    await reloadSubjects();
+  }, [reloadDirectory, reloadSubjects]);
 
   const normalized = query.trim().toLowerCase();
   const totalDocs = totalDocuments(knowledgeBases);
@@ -153,6 +164,18 @@ export function MembersPage() {
     [groups, normalized],
   );
 
+  const pagination: PaginationMeta = useMemo(() => {
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrevious: page > 1,
+    };
+  }, [page, pageSize, total]);
+
   const selectedUser = members.find((user) => user.id === selectedUserId);
   const selectedGroup = groups.find((group) => group.id === selectedGroupId);
 
@@ -160,8 +183,8 @@ export function MembersPage() {
     <div className="space-y-6">
       <PageHeader
         eyebrow="Directory"
-        title="成员与组"
-        description="查看并编辑成员角色、状态、用户组与文档访问范围。成员与用户组来自本地数据库。"
+        title="部门成员"
+        description="查看并编辑成员角色、状态、部门与文档访问范围。成员与部门来自本地数据库。"
         actions={
           <Badge tone="neutral">
             <Icon name="database" size={12} />
@@ -172,17 +195,12 @@ export function MembersPage() {
 
       <StatStrip
         items={[
-          { label: "成员总数", value: members.length, hint: "含停用账号" },
-          { label: "活跃成员", value: activeUsers, hint: "参与权限计算" },
-          { label: "用户组", value: groups.length, hint: "本地数据库" },
+          { label: "成员总数", value: total, hint: "含停用账号" },
+          { label: "活跃成员", value: activeUsers, hint: "当前页" },
+          { label: "部门", value: groups.length, hint: "本地数据库" },
           { label: "数据来源", value: "本地 MySQL", hint: "实时查询" },
         ]}
       />
-
-      <InfoBanner tone="neutral" icon="database" title="本地数据库成员">
-        成员、用户组与角色来自本地
-        MySQL。租户管理员可编辑角色、状态与用户组，并可重置密码；此页的可读文档数为本地预览，不是服务端判定。
-      </InfoBanner>
 
       {directoryStatus === "loading" ? (
         <div className="rounded-xl border border-border bg-surface px-4 py-6 text-sm text-muted">
@@ -205,8 +223,8 @@ export function MembersPage() {
 
       <Tabs
         items={[
-          { id: "members", label: "成员", count: members.length },
-          { id: "groups", label: "用户组", count: groups.length },
+          { id: "members", label: "成员", count: total },
+          { id: "groups", label: "部门", count: groups.length },
         ]}
         value={tab}
         onChange={(next) => {
@@ -215,7 +233,7 @@ export function MembersPage() {
           setSelectedUserId(null);
           setSelectedGroupId(null);
         }}
-        label="成员与用户组视图"
+        label="成员与部门视图"
       />
 
       {tab === "members" ? (
@@ -295,7 +313,7 @@ export function MembersPage() {
                   footer={
                     <>
                       <span>
-                        共 {filteredUsers.length} 名成员 · 活跃 {activeUsers} 名
+                        当前页 {filteredUsers.length} 名 · 活跃 {activeUsers} 名
                       </span>
                       <span>成员来自本地数据库</span>
                     </>
@@ -305,7 +323,7 @@ export function MembersPage() {
                     <tr>
                       <th className={thClass}>成员</th>
                       <th className={thClass}>角色</th>
-                      <th className={thClass}>用户组</th>
+                      <th className={thClass}>部门</th>
                       <th className={thClass}>状态</th>
                       <th className={thClass}>可读文档（本地预览）</th>
                       <th className={thClass}>最近活跃</th>
@@ -343,6 +361,19 @@ export function MembersPage() {
               </ul>
             </>
           )}
+
+          <Pagination
+            pagination={pagination}
+            onPageChange={(next) => {
+              setPage(next);
+              setSelectedUserId(null);
+            }}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+              setSelectedUserId(null);
+            }}
+          />
         </div>
       ) : (
         <div className="space-y-4">
@@ -352,15 +383,15 @@ export function MembersPage() {
               setQuery(value);
               setSelectedGroupId(null);
             }}
-            placeholder="搜索用户组或外部 ID"
-            label="搜索用户组"
+            placeholder="搜索部门或外部 ID"
+            label="搜索部门"
           />
 
           {filteredGroups.length === 0 ? (
             <div className="rounded-xl border border-border bg-surface">
               <EmptyState
                 icon="search"
-                title="没有匹配的用户组"
+                title="没有匹配的部门"
                 description="换一个关键词或清除搜索后重试。"
                 action={
                   <Button variant="secondary" onClick={() => setQuery("")}>
@@ -376,14 +407,14 @@ export function MembersPage() {
                   minWidth={720}
                   footer={
                     <>
-                      <span>共 {filteredGroups.length} 个用户组</span>
+                      <span>共 {filteredGroups.length} 个部门</span>
                       <span>本地数据库 · 实时查询</span>
                     </>
                   }
                 >
                   <thead>
                     <tr>
-                      <th className={thClass}>用户组</th>
+                      <th className={thClass}>部门</th>
                       <th className={thClass}>外部 ID（历史字段）</th>
                       <th className={thClass}>成员</th>
                       <th className={thClass}>成员预览</th>
@@ -430,7 +461,7 @@ export function MembersPage() {
           totalDocs={totalDocs}
           canEdit={currentUser?.role === "tenant_admin"}
           isSelf={currentUser?.id === selectedUser.id}
-          onUpdated={reloadDirectory}
+          onUpdated={handleMemberUpdated}
           onClose={() => setSelectedUserId(null)}
         />
       ) : null}
@@ -459,10 +490,7 @@ function MemberRow({
   totalDocs: number;
   onOpen: () => void;
 }) {
-  const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = groups.find((item) => item.id === groupId);
-    return group ? [group] : [];
-  });
+  const memberGroups = groups.filter((group) => group.id === user.departmentId);
   const readable = readableDocumentsFor(user, knowledgeBases).length;
 
   return (
@@ -528,10 +556,7 @@ function MemberCard({
   totalDocs: number;
   onOpen: () => void;
 }) {
-  const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = groups.find((item) => item.id === groupId);
-    return group ? [group] : [];
-  });
+  const memberGroups = groups.filter((group) => group.id === user.departmentId);
   const readable = readableDocumentsFor(user, knowledgeBases).length;
 
   return (
@@ -580,7 +605,7 @@ function GroupRow({
   onOpen: () => void;
 }) {
   const groupMembers = members.filter(
-    (member) => member.status === "active" && member.groupIds.includes(group.id),
+    (member) => member.status === "active" && member.departmentId === group.id,
   );
   return (
     <tr className={trClass}>
@@ -636,7 +661,7 @@ function GroupCard({
   onOpen: () => void;
 }) {
   const groupMembers = members.filter(
-    (member) => member.status === "active" && member.groupIds.includes(group.id),
+    (member) => member.status === "active" && member.departmentId === group.id,
   );
   return (
     <li className="rounded-xl border border-border bg-surface p-3.5">
@@ -660,7 +685,7 @@ function GroupCard({
       </p>
       <div className="mt-3">
         <Button size="sm" variant="secondary" onClick={onOpen}>
-          查看用户组
+          查看部门
         </Button>
       </div>
     </li>
@@ -690,7 +715,7 @@ function MemberDrawer({
 }) {
   const [role, setRole] = useState<UserRole>(user.role);
   const [status, setStatus] = useState<"active" | "disabled">(user.status);
-  const [groupIds, setGroupIds] = useState<string[]>(user.groupIds);
+  const [departmentId, setDepartmentId] = useState<string | null>(user.departmentId);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -700,21 +725,15 @@ function MemberDrawer({
   useEffect(() => {
     setRole(user.role);
     setStatus(user.status);
-    setGroupIds(user.groupIds);
+    setDepartmentId(user.departmentId);
     setPassword("");
     setError(null);
     setNotice(null);
   }, [user]);
 
-  const memberGroups = user.groupIds.flatMap((groupId) => {
-    const group = groups.find((item) => item.id === groupId);
-    return group ? [group] : [];
-  });
+  const memberGroups = groups.filter((group) => group.id === user.departmentId);
   const readable = readableDocumentsFor(user, knowledgeBases).length;
-  const dirty =
-    role !== user.role ||
-    status !== user.status ||
-    [...groupIds].sort().join(",") !== [...user.groupIds].sort().join(",");
+  const dirty = role !== user.role || status !== user.status || departmentId !== user.departmentId;
 
   async function handleSave() {
     if (!canEdit) {
@@ -724,7 +743,7 @@ function MemberDrawer({
     setError(null);
     setNotice(null);
     try {
-      await updateMember(user.id, { role, status, groupIds });
+      await updateMember(user.id, { role, status, departmentId });
       await onUpdated();
       setNotice("成员信息已保存");
     } catch (cause) {
@@ -754,12 +773,6 @@ function MemberDrawer({
     } finally {
       setResetting(false);
     }
-  }
-
-  function toggleGroup(groupId: string) {
-    setGroupIds((current) =>
-      current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId],
-    );
   }
 
   return (
@@ -841,38 +854,35 @@ function MemberDrawer({
       </section>
 
       <section className="mt-4">
-        <h3 className="text-xs font-medium text-fg">用户组</h3>
-        <p className="mt-1 text-[11px] text-subtle">勾选后整体替换该成员的用户组。</p>
+        <h3 className="text-xs font-medium text-fg">部门</h3>
+        <p className="mt-1 text-[11px] text-subtle">一个成员只能属于一个部门，不选择表示未分配。</p>
         {groups.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-subtle">
-            当前租户没有用户组。
+            当前租户没有部门。
           </p>
         ) : (
-          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-            {groups.map((group) => (
-              <label
-                key={group.id}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-fg"
-              >
-                <input
-                  type="checkbox"
-                  checked={groupIds.includes(group.id)}
-                  onChange={() => toggleGroup(group.id)}
-                  disabled={!canEdit}
-                  className="size-4 accent-[var(--accent)]"
-                />
-                <span className="min-w-0 flex-1 truncate">{group.name}</span>
-                <span className="shrink-0 text-[11px] text-subtle">
+          <label className="mt-2 grid gap-1 text-[11px] text-subtle">
+            所属部门
+            <select
+              value={departmentId ?? ""}
+              onChange={(event) => setDepartmentId(event.target.value || null)}
+              disabled={!canEdit}
+              className="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm text-fg focus:border-accent"
+            >
+              <option value="">未分配</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}（
                   {
                     allMembers.filter(
-                      (member) => member.status === "active" && member.groupIds.includes(group.id),
+                      (member) => member.status === "active" && member.departmentId === group.id,
                     ).length
                   }{" "}
-                  人
-                </span>
-              </label>
-            ))}
-          </div>
+                  人）
+                </option>
+              ))}
+            </select>
+          </label>
         )}
       </section>
 
@@ -883,7 +893,7 @@ function MemberDrawer({
             可读 {readable} / {totalDocs} 篇文档
           </p>
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            本地预览：基于当前页面可见文档与该成员的用户组计算，不是服务端按成员逐篇判定。
+            本地预览：基于当前页面可见文档与该成员的部门计算，不是服务端按成员逐篇判定。
           </p>
           <div className="mt-2">
             <LinkButton href="/permissions" size="sm">
@@ -935,8 +945,8 @@ function MemberDrawer({
             <dd className="text-fg">{formatLastActive(user.lastActiveAt)}</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-subtle">用户组</dt>
-            <dd className="text-fg">{memberGroups.length} 个</dd>
+            <dt className="text-subtle">部门</dt>
+            <dd className="text-fg">{memberGroups[0]?.name ?? "未分配"}</dd>
           </div>
         </dl>
       </section>
@@ -954,7 +964,7 @@ function GroupDrawer({
   onClose: () => void;
 }) {
   const groupMembers = members.filter(
-    (member) => member.status === "active" && member.groupIds.includes(group.id),
+    (member) => member.status === "active" && member.departmentId === group.id,
   );
   return (
     <Drawer
@@ -973,7 +983,7 @@ function GroupDrawer({
       <div className="rounded-xl border border-border bg-surface-2/60 p-4">
         <p className="text-sm font-medium text-fg">{groupMembers.length} 名活跃成员</p>
         <p className="mt-1 text-[11px] leading-5 text-subtle">
-          用户组来自本地数据库。文档权限在“文档权限”中按文档配置，用户组本身不直接授予访问。
+          部门来自本地数据库。文档权限在“文档权限”中按文档配置，部门本身不直接授予访问。
         </p>
         <div className="mt-2">
           <LinkButton href="/permissions" size="sm">
@@ -987,7 +997,7 @@ function GroupDrawer({
         <h3 className="text-xs font-medium text-fg">成员</h3>
         {groupMembers.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-warning/40 bg-warning-soft px-3 py-2.5 text-xs text-warning">
-            该用户组暂无活跃成员。绑定到文档的读取或拒绝规则暂时不会影响任何人。
+            该部门暂无活跃成员。绑定到文档的读取或拒绝规则暂时不会影响任何人。
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">

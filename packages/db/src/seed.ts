@@ -6,10 +6,9 @@ import { inArray } from "drizzle-orm";
 import { createDatabase } from "./client.js";
 import { hashPassword } from "./password.js";
 import {
+  departments,
   documentAcls,
   documents,
-  groupMembers,
-  groups,
   knowledgeBaseAcls,
   knowledgeBases,
   tenants,
@@ -44,6 +43,18 @@ async function seed() {
       .values(seedTenant)
       .onDuplicateKeyUpdate({ set: { name: seedTenant.name, slug: seedTenant.slug } });
 
+    for (const group of seedGroups) {
+      await tx
+        .insert(departments)
+        .values({
+          id: group.id,
+          tenantId: seedTenant.id,
+          name: group.name,
+          externalId: group.externalId,
+        })
+        .onDuplicateKeyUpdate({ set: { name: group.name, externalId: group.externalId } });
+    }
+
     for (const user of seedUsers) {
       await tx
         .insert(users)
@@ -55,6 +66,7 @@ async function seed() {
           displayName: user.name,
           role: user.role,
           status: user.status,
+          departmentId: user.departmentId,
         })
         .onDuplicateKeyUpdate({
           set: {
@@ -62,37 +74,9 @@ async function seed() {
             passwordHash,
             role: user.role,
             status: user.status,
+            departmentId: user.departmentId,
           },
         });
-    }
-
-    for (const group of seedGroups) {
-      await tx
-        .insert(groups)
-        .values({
-          id: group.id,
-          tenantId: seedTenant.id,
-          name: group.name,
-          externalId: group.externalId,
-        })
-        .onDuplicateKeyUpdate({ set: { name: group.name, externalId: group.externalId } });
-    }
-
-    await tx.delete(groupMembers).where(
-      inArray(
-        groupMembers.groupId,
-        seedGroups.map((group) => group.id),
-      ),
-    );
-
-    for (const user of seedUsers) {
-      for (const groupId of user.groupIds) {
-        await tx.insert(groupMembers).values({
-          id: `gm-${user.id}-${groupId}`,
-          groupId,
-          userId: user.id,
-        });
-      }
     }
 
     for (const knowledgeBase of seedKnowledgeBases) {
@@ -105,6 +89,8 @@ async function seed() {
           description: knowledgeBase.description,
           ragflowDatasetId: knowledgeBase.ragflowDatasetId,
           embeddingModel: knowledgeBase.embeddingModel,
+          ownerId: knowledgeBase.ownerId,
+          ownerDepartmentId: knowledgeBase.ownerDepartmentId,
           aclVersion: 1,
           createdAt: new Date(knowledgeBase.createdAt),
           updatedAt: new Date(knowledgeBase.updatedAt),
@@ -116,6 +102,8 @@ async function seed() {
             description: knowledgeBase.description,
             ragflowDatasetId: knowledgeBase.ragflowDatasetId,
             embeddingModel: knowledgeBase.embeddingModel,
+            ownerId: knowledgeBase.ownerId,
+            ownerDepartmentId: knowledgeBase.ownerDepartmentId,
             aclVersion: 1,
             updatedAt: new Date(knowledgeBase.updatedAt),
             deletedAt: null,
@@ -134,6 +122,7 @@ async function seed() {
           sourceKey: document.sourceKey,
           ragflowDocumentId: document.ragflowDocumentId,
           status: document.status,
+          aclMode: document.aclMode ?? "inherit",
           contentHash: null,
           createdAt: new Date(document.createdAt),
           updatedAt: new Date(document.updatedAt),
@@ -146,6 +135,7 @@ async function seed() {
             sourceKey: document.sourceKey,
             ragflowDocumentId: document.ragflowDocumentId,
             status: document.status,
+            aclMode: document.aclMode ?? "inherit",
             contentHash: null,
             updatedAt: new Date(document.updatedAt),
             deletedAt: null,
@@ -195,7 +185,7 @@ async function seed() {
   });
 
   console.log(
-    `Seed complete: tenant=${seedTenant.id} users=${seedUsers.length} groups=${seedGroups.length} knowledgeBases=${seedKnowledgeBases.length} documents=${seedDocuments.length}`,
+    `Seed complete: tenant=${seedTenant.id} users=${seedUsers.length} departments=${seedGroups.length} knowledgeBases=${seedKnowledgeBases.length} documents=${seedDocuments.length}`,
   );
 }
 

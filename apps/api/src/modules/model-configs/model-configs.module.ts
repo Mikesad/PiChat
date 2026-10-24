@@ -6,6 +6,6 @@ import { ModelConfigsService } from "./model-configs.service";
 @Module({
   controllers: [ModelConfigsController],
   providers: [modelConfigCryptoProvider, ModelConfigsService],
-  exports: [ModelConfigsService],
+  exports: [ModelConfigsService, modelConfigCryptoProvider],
 })
 export class ModelConfigsModule {}

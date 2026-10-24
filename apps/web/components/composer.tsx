@@ -1,7 +1,7 @@
 "use client";
 
 import type { ThinkingLevel } from "@pichat/shared";
-import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useToast } from "./admin/toast";
 import { Icon } from "./icons";
@@ -14,7 +14,11 @@ interface ComposerProps {
   onStop: () => void;
   streaming: boolean;
   knowledgeBaseCount: number;
+  knowledgeBaseTotal: number;
+  onOpenKnowledgeBasePicker: () => void;
   focusKey: number;
+  webSearch: boolean;
+  onWebSearchChange: (enabled: boolean) => void;
 }
 
 const thinkingLevels = [
@@ -31,17 +35,43 @@ export function Composer({
   onStop,
   streaming,
   knowledgeBaseCount,
+  knowledgeBaseTotal,
+  onOpenKnowledgeBasePicker,
   focusKey,
+  webSearch,
+  onWebSearchChange,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { configs, defaultConfigId, activeConfig, setDefaultConfig } = useModelConfig();
+  const webSearchRef = useRef<HTMLButtonElement>(null);
+  const modelMeasureRef = useRef<HTMLSpanElement>(null);
+  const lastWheelAtRef = useRef(0);
+  const { chatConfigs, defaultConfigId, setDefaultConfig } = useModelConfig();
   const { showToast } = useToast();
   const [thinking, setThinking] = useState("medium");
+  const [modelSelectWidth, setModelSelectWidth] = useState<number | null>(null);
   const modelId = useId();
   const thinkingId = useId();
 
-  const activeModelId = defaultConfigId ?? configs[0]?.id ?? "none";
-  const activeModel = activeConfig;
+  const activeModelId = defaultConfigId ?? chatConfigs[0]?.id ?? "none";
+  const activeModelLabel =
+    chatConfigs.find((config) => config.id === activeModelId)?.displayName ?? "尚未配置模型";
+
+  useLayoutEffect(() => {
+    const span = modelMeasureRef.current;
+    if (!span) {
+      return;
+    }
+    const update = () => {
+      const width = span.offsetWidth;
+      if (width > 0) {
+        setModelSelectWidth(width);
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(span);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -60,6 +90,30 @@ export function Composer({
     }
   }, [focusKey]);
 
+  useEffect(() => {
+    const button = webSearchRef.current;
+    if (!button) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY === 0) {
+        return;
+      }
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastWheelAtRef.current < 300) {
+        return;
+      }
+      lastWheelAtRef.current = now;
+      const next = event.deltaY > 0;
+      if (next !== webSearch) {
+        onWebSearchChange(next);
+      }
+    };
+    button.addEventListener("wheel", handleWheel, { passive: false });
+    return () => button.removeEventListener("wheel", handleWheel);
+  }, [onWebSearchChange, webSearch]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -68,6 +122,14 @@ export function Composer({
   }
 
   const canSend = value.trim().length > 0 && !streaming;
+  const knowledgeBaseLabel =
+    knowledgeBaseTotal === 0
+      ? "无可用知识库"
+      : knowledgeBaseCount === 0
+        ? "未选择知识库"
+        : knowledgeBaseCount === knowledgeBaseTotal
+          ? `全部 ${knowledgeBaseTotal} 个知识库`
+          : `已选 ${knowledgeBaseCount}/${knowledgeBaseTotal} 个知识库`;
 
   return (
     <div className="shrink-0 border-t border-border bg-bg/85 px-3 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur sm:px-6">
@@ -85,17 +147,33 @@ export function Composer({
             onKeyDown={handleKeyDown}
             aria-describedby="composer-hint"
             placeholder="输入问题，例如：出差住宿报销标准是多少？"
-            className="max-h-[200px] min-h-14 w-full resize-none bg-transparent px-2.5 py-2 text-base leading-6 text-fg outline-none placeholder:text-subtle sm:text-[15px]"
+            className="max-h-[200px] min-h-16 w-full resize-none bg-transparent px-2.5 py-2 text-base leading-6 text-fg outline-none placeholder:text-subtle sm:text-[15px]"
           />
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 pt-1">
             <div className="flex min-w-0 flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => showToast("附件上传即将支持", "neutral")}
+                aria-label="添加附件"
+                title="添加附件（即将支持）"
+                className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted transition-colors duration-150 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 sm:h-7 sm:w-7"
+              >
+                <Icon name="paperclip" size={17} strokeWidth={1.8} />
+              </button>
               <div className="relative shrink-0">
+                <span
+                  ref={modelMeasureRef}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-0 top-0 invisible select-none whitespace-pre pl-2 text-base sm:pl-1.5 sm:text-[11px] pr-6 sm:pr-5"
+                >
+                  {activeModelLabel}
+                </span>
                 <label htmlFor={modelId} className="sr-only">
                   选择模型
                 </label>
                 <select
                   id={modelId}
-                  value={configs.length > 0 ? activeModelId : "none"}
+                  value={chatConfigs.length > 0 ? activeModelId : "none"}
                   onChange={(event) => {
                     if (event.target.value !== "none") {
                       void setDefaultConfig(event.target.value).catch(() => {
@@ -103,17 +181,22 @@ export function Composer({
                       });
                     }
                   }}
-                  disabled={configs.length === 0}
-                  title={activeModel?.displayName ?? "在左下角账号菜单中配置模型"}
+                  disabled={chatConfigs.length === 0}
+                  title={
+                    activeModelLabel === "尚未配置模型"
+                      ? "在左下角账号菜单中配置模型"
+                      : activeModelLabel
+                  }
+                  style={modelSelectWidth !== null ? { width: `${modelSelectWidth}px` } : undefined}
                   className={cn(
                     "h-11 w-[9rem] cursor-pointer appearance-none rounded-md bg-transparent pr-6 pl-2 text-base text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-fg sm:h-7 sm:w-[8.5rem] sm:pr-5 sm:pl-1.5 sm:text-[11px]",
-                    configs.length === 0 && "cursor-not-allowed opacity-60",
+                    chatConfigs.length === 0 && "cursor-not-allowed opacity-60",
                   )}
                 >
-                  {configs.length === 0 ? (
+                  {chatConfigs.length === 0 ? (
                     <option value="none">尚未配置模型</option>
                   ) : (
-                    configs.map((config) => (
+                    chatConfigs.map((config) => (
                       <option key={config.id} value={config.id}>
                         {config.displayName}
                       </option>
@@ -150,20 +233,62 @@ export function Composer({
                   className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-subtle"
                 />
               </div>
-
-              <span aria-hidden="true" className="mx-0.5 hidden h-3 w-px bg-border sm:block" />
-
-              <span
-                className="hidden h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 text-[11px] font-medium text-muted sm:inline-flex"
-                title="检索范围按当前账号权限自动过滤"
-              >
-                <Icon name="database" size={12} className="text-subtle" />
-                {knowledgeBaseCount} 个知识库
-                <Icon name="lock" size={11} className="text-subtle" />
-              </span>
             </div>
 
             <div className="ml-auto flex shrink-0 items-center gap-2">
+              <button
+                ref={webSearchRef}
+                type="button"
+                role="switch"
+                aria-checked={webSearch}
+                aria-label="联网搜索"
+                title={`联网搜索：${webSearch ? "开" : "关"}（悬停时滚轮向下开、向上关）`}
+                onClick={() => onWebSearchChange(!webSearch)}
+                className={cn(
+                  "inline-flex h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-base transition-colors duration-150 sm:h-7 sm:text-[11px]",
+                  webSearch
+                    ? "border-accent/40 bg-accent/10 text-accent"
+                    : "border-border bg-surface-2 text-muted hover:text-fg",
+                )}
+              >
+                <Icon name="globe" size={12} />
+                <span className="hidden sm:inline">联网搜索</span>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "relative h-3.5 w-6 rounded-full transition-colors duration-150",
+                    webSearch ? "bg-accent" : "bg-border-strong",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 left-0.5 size-2.5 rounded-full bg-surface transition-transform duration-150",
+                      webSearch && "translate-x-2.5",
+                    )}
+                  />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenKnowledgeBasePicker}
+                disabled={knowledgeBaseTotal === 0}
+                aria-haspopup="dialog"
+                aria-label={`选择知识库，${knowledgeBaseLabel}`}
+                title="选择本次会话检索的知识库"
+                className={cn(
+                  "inline-flex h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 text-base font-medium text-muted transition-colors hover:bg-surface hover:text-fg sm:h-7 sm:text-[11px]",
+                  knowledgeBaseTotal === 0 && "cursor-not-allowed opacity-50",
+                )}
+              >
+                <Icon name="database" size={12} className="text-subtle" />
+                <span className="hidden sm:inline">{knowledgeBaseLabel}</span>
+                <span className="sm:hidden">
+                  {knowledgeBaseCount}/{knowledgeBaseTotal}
+                </span>
+                <Icon name="chevron-down" size={10} className="text-subtle" />
+              </button>
+
               {streaming ? (
                 <button
                   type="button"
@@ -196,7 +321,15 @@ export function Composer({
           id="composer-hint"
           className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[11px] leading-4 text-subtle"
         >
-          <span>回答基于授权知识库，可能存在遗漏，请以引用原文为准。</span>
+          <span>
+            {webSearch
+              ? "联网搜索已开启：外部网页内容仅供参考，请核实来源。"
+              : knowledgeBaseTotal === 0
+                ? "当前账号没有可读知识库，回答不会包含企业文档。"
+                : knowledgeBaseCount === 0
+                  ? "未选择知识库：本次只做通用回答，不检索企业文档。"
+                  : "回答基于所选知识库，可能存在遗漏，请以引用原文为准。"}
+          </span>
           <span className="hidden sm:inline">Enter 发送 · Shift + Enter 换行</span>
         </p>
       </div>

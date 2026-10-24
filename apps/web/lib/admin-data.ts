@@ -1,4 +1,8 @@
-import { type AclEntry, decideDocumentAccess } from "@pichat/access-control";
+import {
+  type AclEntry,
+  decideEffectiveDocumentAccess,
+  type KnowledgeBaseAclEntry,
+} from "@pichat/access-control";
 
 export type UserRole = "member" | "knowledge_admin" | "security_admin" | "tenant_admin";
 export type DocumentStatus = "pending" | "parsing" | "ready" | "failed" | "deleted";
@@ -10,7 +14,7 @@ export interface AdminUser {
   name: string;
   email: string;
   role: UserRole;
-  groupIds: string[];
+  departmentId: string | null;
   status: "active" | "disabled";
   lastActiveAt?: string | null;
 }
@@ -35,6 +39,7 @@ export interface AdminDocument {
   knowledgeBaseId: string;
   title: string;
   status: DocumentStatus;
+  aclMode?: "inherit" | "restricted";
   sizeLabel: string | null;
   updatedAt: string;
   updatedLabel: string;
@@ -45,6 +50,7 @@ export interface AdminDocument {
   errorMessage?: string | null;
   exceptions: AclException[];
   effectiveReaderCount: number;
+  canRead: boolean;
   canManageAcl: boolean;
 }
 
@@ -53,6 +59,8 @@ export interface AdminKnowledgeBase {
   name: string;
   description: string;
   embeddingModel: string;
+  ownerId?: string | null;
+  ownerDepartmentId: string | null;
   ragflowDatasetId: string;
   retrievalTopK: number;
   retrievalSimilarityThreshold: number;
@@ -62,10 +70,19 @@ export interface AdminKnowledgeBase {
   updatedAt: string;
   updatedLabel: string;
   defaultSubjects: AclSubject[];
+  deniedSubjects: AclSubject[];
   documentCount: number;
   readableDocumentCount: number;
   canManageAcl: boolean;
   documents: AdminDocument[];
+}
+
+export function canViewMembers(role: UserRole | undefined): boolean {
+  return role === "tenant_admin" || role === "security_admin";
+}
+
+export function canViewAudit(role: UserRole | undefined): boolean {
+  return role === "tenant_admin" || role === "security_admin";
 }
 
 export const mockCurrentUser: AdminUser = {
@@ -73,7 +90,7 @@ export const mockCurrentUser: AdminUser = {
   name: "张明",
   email: "zhang.ming@example.com",
   role: "tenant_admin",
-  groupIds: ["g-all", "g-platform"],
+  departmentId: "g-platform",
   status: "active",
 };
 
@@ -84,7 +101,7 @@ export const users: AdminUser[] = [
     name: "李雷",
     email: "li.lei@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product", "g-finance"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -92,7 +109,7 @@ export const users: AdminUser[] = [
     name: "王芳",
     email: "wang.fang@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -100,7 +117,7 @@ export const users: AdminUser[] = [
     name: "陈晨",
     email: "chen.chen@example.com",
     role: "knowledge_admin",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -108,7 +125,7 @@ export const users: AdminUser[] = [
     name: "刘洋",
     email: "liu.yang@example.com",
     role: "security_admin",
-    groupIds: ["g-all", "g-platform"],
+    departmentId: "g-platform",
     status: "active",
   },
   {
@@ -116,7 +133,7 @@ export const users: AdminUser[] = [
     name: "赵敏",
     email: "zhao.min@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -124,7 +141,7 @@ export const users: AdminUser[] = [
     name: "孙悦",
     email: "sun.yue@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -132,7 +149,7 @@ export const users: AdminUser[] = [
     name: "周杰",
     email: "zhou.jie@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -140,7 +157,7 @@ export const users: AdminUser[] = [
     name: "吴静",
     email: "wu.jing@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -148,7 +165,7 @@ export const users: AdminUser[] = [
     name: "郑凯",
     email: "zheng.kai@example.com",
     role: "member",
-    groupIds: ["g-all", "g-support"],
+    departmentId: "g-support",
     status: "active",
   },
   {
@@ -156,7 +173,7 @@ export const users: AdminUser[] = [
     name: "冯雪",
     email: "feng.xue@example.com",
     role: "member",
-    groupIds: ["g-all", "g-product"],
+    departmentId: "g-product",
     status: "active",
   },
   {
@@ -164,7 +181,7 @@ export const users: AdminUser[] = [
     name: "何伟",
     email: "he.wei@example.com",
     role: "member",
-    groupIds: ["g-all"],
+    departmentId: "g-platform",
     status: "active",
   },
   {
@@ -172,7 +189,7 @@ export const users: AdminUser[] = [
     name: "许琳",
     email: "xu.lin@example.com",
     role: "member",
-    groupIds: ["g-all", "g-finance"],
+    departmentId: "g-finance",
     status: "active",
   },
   {
@@ -180,18 +197,18 @@ export const users: AdminUser[] = [
     name: "顾强",
     email: "gu.qiang@example.com",
     role: "member",
-    groupIds: ["g-all"],
+    departmentId: "g-platform",
     status: "disabled",
   },
 ];
 
 export const groups: AdminGroup[] = [
   { id: "g-all", name: "全员", externalId: "idp-all-staff" },
-  { id: "g-platform", name: "平台组", externalId: "idp-platform" },
-  { id: "g-product", name: "产品组", externalId: "idp-product" },
-  { id: "g-support", name: "售后组", externalId: "idp-support" },
-  { id: "g-finance", name: "财务组", externalId: "idp-finance" },
-  { id: "g-outsource", name: "外包组", externalId: "idp-outsource" },
+  { id: "g-platform", name: "平台部", externalId: "idp-platform" },
+  { id: "g-product", name: "产品部", externalId: "idp-product" },
+  { id: "g-support", name: "售后部", externalId: "idp-support" },
+  { id: "g-finance", name: "财务部", externalId: "idp-finance" },
+  { id: "g-outsource", name: "外包部", externalId: "idp-outsource" },
 ];
 
 export const roleLabels: Record<UserRole, string> = {
@@ -241,11 +258,17 @@ function doc(
   knowledgeBaseId: string,
   input: Omit<
     AdminDocument,
-    "knowledgeBaseId" | "exceptions" | "createdAt" | "effectiveReaderCount" | "canManageAcl"
+    | "knowledgeBaseId"
+    | "exceptions"
+    | "createdAt"
+    | "effectiveReaderCount"
+    | "canRead"
+    | "canManageAcl"
   > & {
     exceptions?: AclException[];
     createdAt?: string;
     effectiveReaderCount?: number;
+    canRead?: boolean;
     canManageAcl?: boolean;
   },
 ): AdminDocument {
@@ -255,6 +278,7 @@ function doc(
     exceptions: input.exceptions ?? [],
     createdAt: input.createdAt ?? input.updatedAt,
     effectiveReaderCount: input.effectiveReaderCount ?? 0,
+    canRead: input.canRead ?? true,
     canManageAcl: input.canManageAcl ?? true,
   };
 }
@@ -265,6 +289,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     name: "内部制度",
     description: "公司级制度、流程与合规文件，默认全员可读。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerDepartmentId: "g-platform",
     ragflowDatasetId: "ragflow_policy_2026",
     retrievalTopK: 6,
     retrievalSimilarityThreshold: 0.2,
@@ -277,6 +302,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     updatedAt: "2026-10-20T10:24:00+08:00",
     updatedLabel: "今天 10:24",
     defaultSubjects: [{ type: "group", id: "g-all" }],
+    deniedSubjects: [],
     documents: [
       doc("kb-policy", {
         id: "doc-travel",
@@ -339,8 +365,9 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
   {
     id: "kb-product",
     name: "产品手册",
-    description: "对外产品资料与内部版本说明，默认产品组可读。",
+    description: "对外产品资料与内部版本说明，默认产品部可读。",
     embeddingModel: "text-embedding-3-large · 3072 维",
+    ownerDepartmentId: "g-product",
     ragflowDatasetId: "ragflow_product_v3",
     retrievalTopK: 6,
     retrievalSimilarityThreshold: 0.2,
@@ -353,6 +380,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     updatedAt: "2026-10-20T09:05:00+08:00",
     updatedLabel: "今天 09:05",
     defaultSubjects: [{ type: "group", id: "g-product" }],
+    deniedSubjects: [],
     documents: [
       doc("kb-product", {
         id: "doc-whitepaper",
@@ -412,6 +440,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     name: "售后知识库",
     description: "客服与售后团队的处理规范、话术与常见问题。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerDepartmentId: "g-support",
     ragflowDatasetId: "ragflow_support_2026",
     retrievalTopK: 6,
     retrievalSimilarityThreshold: 0.2,
@@ -424,6 +453,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     updatedAt: "2026-10-19T17:42:00+08:00",
     updatedLabel: "昨天 17:42",
     defaultSubjects: [{ type: "group", id: "g-support" }],
+    deniedSubjects: [],
     documents: [
       doc("kb-support", {
         id: "doc-complaint",
@@ -484,6 +514,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     name: "董事会材料",
     description: "仅在明确授权后可读，默认不对普通成员开放。",
     embeddingModel: "bge-m3 · 1024 维",
+    ownerDepartmentId: "g-finance",
     ragflowDatasetId: "ragflow_board_2026",
     retrievalTopK: 6,
     retrievalSimilarityThreshold: 0.2,
@@ -496,6 +527,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
     updatedAt: "2026-09-30T18:00:00+08:00",
     updatedLabel: "9月30日",
     defaultSubjects: [],
+    deniedSubjects: [],
     documents: [
       doc("kb-board", {
         id: "doc-board-minutes",
@@ -541,14 +573,14 @@ export function findGroup(groupId: string) {
 }
 
 export function groupMemberCount(groupId: string) {
-  return users.filter((user) => user.status === "active" && user.groupIds.includes(groupId)).length;
+  return users.filter((user) => user.status === "active" && user.departmentId === groupId).length;
 }
 
 export function subjectName(subject: AclSubject) {
   if (subject.type === "user") {
     return findUser(subject.id)?.name ?? "未知用户";
   }
-  return findGroup(subject.id)?.name ?? "未知用户组";
+  return findGroup(subject.id)?.name ?? "未知部门";
 }
 
 export function subjectMemberCount(subject: AclSubject) {
@@ -570,39 +602,65 @@ export function subjectOptionLabel(subject: AclSubject) {
 }
 
 export function matchesSubject(subject: AclSubject, user: AdminUser) {
-  return subject.type === "user" ? subject.id === user.id : user.groupIds.includes(subject.id);
+  return subject.type === "user" ? subject.id === user.id : user.departmentId === subject.id;
 }
 
 export function toPrincipal(user: AdminUser) {
   return {
     tenantId: "tenant-demo",
     userId: user.id,
-    groupIds: user.groupIds,
+    departmentId: user.departmentId,
     role: user.role,
   };
 }
 
-export function effectiveAclEntries(
-  knowledgeBase: AdminKnowledgeBase,
-  document: AdminDocument,
-  exceptions: AclException[] = document.exceptions,
-): AclEntry[] {
+function effectiveDefaults(knowledgeBase: AdminKnowledgeBase): KnowledgeBaseAclEntry[] {
   return [
     ...knowledgeBase.defaultSubjects.map((subject) => ({
-      documentId: document.id,
       knowledgeBaseId: knowledgeBase.id,
       subjectType: subject.type,
       subjectId: subject.id,
       permission: "read" as const,
     })),
-    ...exceptions.map((exception) => ({
-      documentId: document.id,
+    ...knowledgeBase.deniedSubjects.map((subject) => ({
       knowledgeBaseId: knowledgeBase.id,
-      subjectType: exception.type,
-      subjectId: exception.id,
-      permission: exception.permission,
+      subjectType: subject.type,
+      subjectId: subject.id,
+      permission: "deny" as const,
     })),
   ];
+}
+
+function effectiveExceptions(
+  knowledgeBase: AdminKnowledgeBase,
+  document: AdminDocument,
+  exceptions: AclException[],
+): AclEntry[] {
+  return exceptions.map((exception) => ({
+    knowledgeBaseId: knowledgeBase.id,
+    documentId: document.id,
+    subjectType: exception.type,
+    subjectId: exception.id,
+    permission: exception.permission,
+  }));
+}
+
+function decideFor(
+  knowledgeBase: AdminKnowledgeBase,
+  document: AdminDocument,
+  user: AdminUser,
+  exceptions: AclException[],
+) {
+  return decideEffectiveDocumentAccess(
+    effectiveDefaults(knowledgeBase),
+    effectiveExceptions(knowledgeBase, document, exceptions),
+    toPrincipal(user),
+    {
+      id: document.id,
+      knowledgeBaseId: knowledgeBase.id,
+      aclMode: document.aclMode ?? "inherit",
+    },
+  );
 }
 
 export function effectiveUsersFor(
@@ -611,7 +669,6 @@ export function effectiveUsersFor(
   exceptions: AclException[],
   includeAdmins = false,
 ) {
-  const entries = effectiveAclEntries(knowledgeBase, document, exceptions);
   return users.filter((user) => {
     if (!includeAdmins && user.role === "tenant_admin") {
       return false;
@@ -619,7 +676,7 @@ export function effectiveUsersFor(
     if (user.status !== "active") {
       return false;
     }
-    return decideDocumentAccess(entries, toPrincipal(user), document.id).allowed;
+    return decideFor(knowledgeBase, document, user, exceptions).allowed;
   });
 }
 
@@ -644,8 +701,7 @@ export function explainAccessFor(
   user: AdminUser,
   exceptions: AclException[],
 ): AccessExplanation {
-  const entries = effectiveAclEntries(knowledgeBase, document, exceptions);
-  const decision = decideDocumentAccess(entries, toPrincipal(user), document.id);
+  const decision = decideFor(knowledgeBase, document, user, exceptions);
 
   if (decision.reason === "role_override") {
     return { allowed: true, reason: "role_override" };
@@ -656,11 +712,14 @@ export function explainAccessFor(
   );
 
   if (decision.reason === "explicit_deny") {
+    const knowledgeBaseDeny = knowledgeBase.deniedSubjects.find((subject) =>
+      matchesSubject(subject, user),
+    );
     return {
       allowed: false,
       reason: "explicit_deny",
-      source: "document_exception",
-      subject: matchingDeny,
+      source: knowledgeBaseDeny ? "knowledge_base" : "document_exception",
+      subject: knowledgeBaseDeny ?? matchingDeny,
     };
   }
 
@@ -743,11 +802,22 @@ export function removeException(exceptions: AclException[], subject: AclSubject)
   return exceptions.filter((exception) => subjectKey(exception) !== subjectKey(subject));
 }
 
-export function defaultAccessLabel(knowledgeBase: AdminKnowledgeBase) {
-  if (knowledgeBase.defaultSubjects.length === 0) {
-    return "未设置默认范围";
+export function defaultAccessLabel(
+  knowledgeBase: AdminKnowledgeBase,
+  resolveSubjectName: (subject: AclSubject) => string,
+) {
+  const parts: string[] = [];
+  if (knowledgeBase.defaultSubjects.length > 0) {
+    parts.push(
+      `允许：${knowledgeBase.defaultSubjects.map((subject) => resolveSubjectName(subject)).join("、")}`,
+    );
   }
-  return knowledgeBase.defaultSubjects.map((subject) => subjectName(subject)).join("、");
+  if (knowledgeBase.deniedSubjects.length > 0) {
+    parts.push(
+      `禁止：${knowledgeBase.deniedSubjects.map((subject) => resolveSubjectName(subject)).join("、")}`,
+    );
+  }
+  return parts.length > 0 ? parts.join("；") : "未设置默认范围";
 }
 
 export function sortDocuments(
@@ -999,22 +1069,45 @@ export const seedAuditLogs: AuditLogEntry[] = [
     resourceId: "doc-complaint",
     resourceLabel: "客户投诉处理 SOP.docx",
     result: "success",
-    summary: "新增读取例外：产品组",
-    metadata: [{ label: "新增", value: "读取 · 产品组" }],
+    summary: "新增读取例外：产品部",
+    metadata: [{ label: "新增", value: "读取 · 产品部" }],
   },
 ];
 
 export function readableDocumentsFor(user: AdminUser, knowledgeBases: AdminKnowledgeBase[]) {
   const principal = toPrincipal(user);
-  return knowledgeBases.flatMap((knowledgeBase) =>
-    knowledgeBase.documents
+  return knowledgeBases.flatMap((knowledgeBase) => {
+    const defaults: KnowledgeBaseAclEntry[] = [
+      ...knowledgeBase.defaultSubjects.map((subject) => ({
+        knowledgeBaseId: knowledgeBase.id,
+        subjectType: subject.type,
+        subjectId: subject.id,
+        permission: "read" as const,
+      })),
+      ...knowledgeBase.deniedSubjects.map((subject) => ({
+        knowledgeBaseId: knowledgeBase.id,
+        subjectType: subject.type,
+        subjectId: subject.id,
+        permission: "deny" as const,
+      })),
+    ];
+    return knowledgeBase.documents
       .filter((document) => document.status !== "deleted")
-      .filter(
-        (document) =>
-          decideDocumentAccess(effectiveAclEntries(knowledgeBase, document), principal, document.id)
-            .allowed,
-      ),
-  );
+      .filter((document) => {
+        const exceptions: AclEntry[] = document.exceptions.map((exception) => ({
+          knowledgeBaseId: knowledgeBase.id,
+          documentId: document.id,
+          subjectType: exception.type,
+          subjectId: exception.id,
+          permission: exception.permission,
+        }));
+        return decideEffectiveDocumentAccess(defaults, exceptions, principal, {
+          id: document.id,
+          knowledgeBaseId: knowledgeBase.id,
+          aclMode: document.aclMode ?? "inherit",
+        }).allowed;
+      });
+  });
 }
 
 export function totalDocuments(knowledgeBases: AdminKnowledgeBase[]) {
@@ -1026,5 +1119,5 @@ export function totalDocuments(knowledgeBases: AdminKnowledgeBase[]) {
 }
 
 export function activeGroupMembers(groupId: string) {
-  return users.filter((user) => user.status === "active" && user.groupIds.includes(groupId));
+  return users.filter((user) => user.status === "active" && user.departmentId === groupId);
 }
