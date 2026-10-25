@@ -6,7 +6,7 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 
 ## 当前状态
 
-第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。任务 C 已完成：用户级模型配置加密 API + Web 接真；文档上传、BullMQ 入队、Worker 上传 RAGFlow 并轮询解析状态、失败重试与 Web 状态刷新。任务 D 已完成：Agent Runtime 接入 prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话；业务 API 新增 chat 会话/消息/SSE 代理与 MySQL 落库；Web 对话页接真。任务 E 已完成：同步创建知识库（先建 RAGFlow dataset）、知识库软删除、文档软删除与本地/RAGFlow/队列清理、同库多文档批量授权。文档在线预览已完成：内容 API 做 ACL/租户/软删除校验，BFF 透传 Range，知识库详情页与聊天「引用与来源」均可打开 PDF/DOCX/MD/TXT 弹窗预览。当前本机 MySQL、Redis、RAGFlow 均已可达，API/Runtime/Worker 启动冒烟通过；真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证；预览 API/BFF 的 200/206/416/401/404 已验证，Chrome headless 已验证 MD/TXT/DOCX 弹窗渲染与 PDF iframe 加载；本机已有用户模型配置，Agent + 真实 LLM 的回答/引用 E2E 待实际跑通。任务 F 已完成：成员/部门查询与编辑、密码重置、审计查询 API + 审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime；RAGFlow 解析配置（chunk 大小/方法）仍待排期。联网搜索已接入：`pi-web-access@0.44.0` 作为 Runtime 进程内 Pi 扩展加载，仅开放 `web_search`，开关按单次请求生效；Web 输入区支持点击/键盘/悬停滚轮切换。本地已配置 Tavily，工具级真实搜索已验证；完整 LLM 联网回答待模型配置。管理端已新增「模型配置」与「搜索引擎」页：模型按对话/Embedding/ReRank/视觉/语音分类，搜索引擎支持 Tavily、加密 Key、HTTP 代理、默认配置与测试连接；Embedding 接入知识库创建，ReRank 通过 RAGFlow `rerank_id` 接入检索。知识库访问范围已支持允许/禁止名单，知识库级 deny 覆盖文档 read；对话输入区支持按会话多选目标知识库，空选不检索。
+第一冲刺已完成：真实登录与会话、动态 ACL、种子数据、知识库/文档/ACL 薄 API、Web BFF，知识库与文档权限页已接真实接口。任务 C 已完成：企业共享模型配置加密 API + Web 接真；文档上传、BullMQ 入队、Worker 上传 RAGFlow 并轮询解析状态、失败重试与 Web 状态刷新。任务 D 已完成：Agent Runtime 接入 prompt、SSE、`kb_search` / `kb_read`、Pi JSONL 会话；业务 API 新增 chat 会话/消息/SSE 代理与 MySQL 落库；Web 对话页接真。任务 E 已完成：同步创建知识库（先建 RAGFlow dataset）、知识库软删除、文档软删除与本地/RAGFlow/队列清理、同库多文档批量授权。文档在线预览已完成：内容 API 做 ACL/租户/软删除校验，BFF 透传 Range，知识库详情页与聊天「引用与来源」均可打开 PDF/DOCX/MD/TXT 弹窗预览。当前本机 MySQL、Redis、RAGFlow 均已可达，API/Runtime/Worker 启动冒烟通过；真实 RAGFlow 上传/解析/检索已用 MD/TXT/PDF/DOCX 四种格式验证，真实 ACL deny 已验证；预览 API/BFF 的 200/206/416/401/404 已验证，Chrome headless 已验证 MD/TXT/DOCX 弹窗渲染与 PDF iframe 加载；本机已有企业共享模型配置，Agent + 真实 LLM 的回答/引用 E2E 待实际跑通。任务 F 已完成：成员/部门查询与编辑、密码重置、审计查询 API + 审计页接真、知识库设置更新与检索参数（topK/相似度阈值/向量权重）持久化并接入 Runtime；RAGFlow 解析配置（chunk 大小/方法）仍待排期。联网搜索已接入：`pi-web-access@0.44.0` 作为 Runtime 进程内 Pi 扩展加载，仅开放 `web_search`，开关按单次请求生效；Web 输入区支持点击/键盘/悬停滚轮切换。本地已配置 Tavily，工具级真实搜索已验证；完整 LLM 联网回答待模型配置。管理端已新增「模型配置」与「搜索引擎」页：模型按对话/Embedding/ReRank/视觉/语音分类，搜索引擎支持 Tavily、加密 Key、HTTP 代理、默认配置与测试连接；Embedding 接入知识库创建，ReRank 通过 RAGFlow `rerank_id` 接入检索。知识库访问范围已支持允许/禁止名单，知识库级 deny 覆盖文档 read；对话输入区支持按会话多选目标知识库，空选不检索。模型与搜索引擎配置已改为企业（租户）共享：管理员统一维护，所有成员在对话、Embedding、ReRank 与联网搜索中直接使用，卡片展示创建人。
 
 已实现：
 
@@ -19,17 +19,17 @@ PiChat 是网页版 Agent：员工用自然语言提问，Agent 基于其有权�
 - 文档权限 UI：ACL 抽屉、有效人数、访问检查、多选批量授权；有效人数与访问判定来自服务端，主体名称与人数来自实时成员目录，批量授权要求同一知识库
 - 部门成员 UI：真实 `GET /api/members` 成员/部门与最近活跃，`GET /api/members/directory` 为 ACL 提供轻量主体目录；`tenant_admin` 可编辑角色、状态、部门并重置密码
 - 审计日志 UI：真实 `GET /api/audit-logs` 事件流、筛选、详情（actor、资源标题与 metadata 来自服务端）
-- 模型配置 UI：OpenCode Go / DeepSeek 官方；配置按用户保存在服务端，API Key 使用 AES-256-GCM 加密，浏览器只拿脱敏值
+- 模型配置 UI：OpenCode Go / DeepSeek 官方；配置按企业共享、管理员维护，所有成员可在对话中选择使用；API Key 使用 AES-256-GCM 加密，浏览器只拿脱敏值与创建人
 - 文档上传 UI：真实 multipart 上传、逐文件状态、每 3 秒轮询 `pending`/`parsing`、失败文档重新解析
 - 文档在线预览：知识库详情页与聊天引用共用弹窗，预览 PDF/DOCX/MD/TXT；内容接口校验 ACL/租户/软删除与路径边界，支持单段 Range
-- NestJS + Fastify API：认证、知识库（含设置与检索参数）、文档上传/重试/内容预览、ACL、访问检查、成员与部门、审计查询、用户级模型配置、chat 会话/消息/SSE、内部 ACL 接口
+- NestJS + Fastify API：认证、知识库（含设置与检索参数）、文档上传/重试/内容预览、ACL、访问检查、成员与部门、审计查询、企业共享模型与搜索引擎配置、chat 会话/消息/SSE、内部 ACL 接口
 - Agent Runtime：Pi Agent Loop、SSE、`kb_search` / `kb_read` / `kb_list_scope` / `kb_read_around` / `kb_find_in_document` / `kb_document_outline`、按会话目标知识库过滤、ACL scope/复核、Pi JSONL 会话、per-run 临时模型 Key
 - 联网搜索：`pi-web-access` 进程内扩展，请求级开关，仅 `web_search`；Bocha/Tavily 服务端 Key，网页内容按不可信数据与 Markdown 链接引用处理
-- MySQL 8 Schema 与迁移：租户、用户、组、知识库、文档、ACL、会话、消息、审计、模型配置
+- MySQL 8 Schema 与迁移：租户、用户、部门、知识库、文档、ACL、会话、消息、审计、企业共享模型与搜索配置
 - 可重复 seed：1 租户、14 用户、6 组、4 知识库、16 文档，密码 `123456`
-- ACL 策略：知识库默认允许/禁止 + 文档例外、deny 优先、知识库级 deny 覆盖文档 read、`tenant_admin` 覆盖；16 个纯策略单测
-- 知识库生命周期：同步创建 RAGFlow dataset；知识库/文档软删除；批量整体替换文档例外；审计与 ACL 缓存失效
-- 测试：ACL 16、API 79、Runtime 41、Shared 7、Worker 10、RAGFlow client 10，共 163 个
+- ACL 策略：知识库默认允许/禁止 + 文档级权限、deny 优先、知识库级 deny 覆盖文档 read、`tenant_admin` 覆盖；20 个纯策略单测
+- 知识库生命周期：同步创建 RAGFlow dataset；知识库/文档软删除；批量整体替换文档级权限；审计与 ACL 缓存失效
+- 测试：ACL 20、API 96、Runtime 46、Shared 7、Worker 10、RAGFlow client 11，共 190 个
 - `packages/queue`：统一队列名、Job 类型、确定性 jobId 与 Redis 连接参数；Worker 接通 RAGFlow 上传/解析轮询
 - RAGFlow 客户端（含 dataset/document 删除与 404 幂等）、共享 SSE 协议与解析器、ADR
 
@@ -109,17 +109,18 @@ pnpm --filter @pichat/web start
 docker compose -f infra/docker/compose.dev.yaml up -d
 ```
 
-文档上传需要 Redis（`REDIS_URL`）。Worker 还需要 `RAGFLOW_BASE_URL`、`RAGFLOW_API_KEY` 和 `RAGFLOW_DEFAULT_EMBEDDING_MODEL`；缺少时会明确报错，不会伪造解析成功。对话需要 API + Agent Runtime；可在左下角账号菜单或管理端「模型配置」中配置对话模型，在「搜索引擎」中配置 Tavily。知识库六个工具都需要可用的 RAGFlow。
+文档上传需要 Redis（`REDIS_URL`）。Worker 还需要 `RAGFLOW_BASE_URL`、`RAGFLOW_API_KEY` 和 `RAGFLOW_DEFAULT_EMBEDDING_MODEL`；缺少时会明确报错，不会伪造解析成功。对话需要 API + Agent Runtime；模型与搜索引擎配置由 `tenant_admin` 在管理端「模型配置」「搜索引擎」中统一维护，企业内所有成员共享使用。知识库六个工具都需要可用的 RAGFlow。
 
 `pnpm db:push` 会直接把 Drizzle Schema 应用到数据库。需要可审查的 SQL 迁移时使用 `pnpm db:generate`；迁移已生成在 `packages/db/drizzle/`。`pnpm db:seed` 会重置 demo 租户的知识库/文档/ACL 数据，可重复执行。
 
-种子账号（密码均为 `123456`）：
+当前本机演示账号（2026-10-25 重置，密码均为 `123456`）：
 
-- 张明：`zhang.ming@example.com`（tenant_admin）
-- 王芳：`wang.fang@example.com`（member）
-- 陈晨：`chen.chen@example.com`（knowledge_admin）
-- 刘洋：`liu.yang@example.com`（security_admin）
-- 顾强：`gu.qiang@example.com`（disabled）
+- 张明：`zhangming@qq.com`（tenant_admin，研发部）
+- 陈晨：`chenchen@qq.com`（member，产品部）
+- 赵敏：`zhaomin@qq.com`（member，财务部）
+- 王芳：`wangfang@qq.com`（member，综合部）
+
+> `pnpm db:seed` 仍会写入旧的演示种子；重置前先确认是否会覆盖当前账号、知识库和 ACL 数据。
 
 ## 服务端口
 
@@ -176,7 +177,7 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 
 任务 A–F + 联网搜索 + 知识库选择使用 Node 22.23.3 + 本机 MySQL 验证通过：
 
-- `pnpm test`：163 个测试通过（ACL 16 + API 79 + Runtime 41 + Shared 7 + Worker 10 + RAGFlow client 10）
+- `pnpm test`：190 个测试通过（ACL 20 + API 96 + Runtime 46 + Shared 7 + Worker 10 + RAGFlow client 11）
 - `pnpm typecheck`：9 个 workspace 包全部通过（Turbo `--concurrency=1`）
 - `pnpm lint`：9 个 workspace 包全部通过
 - `pnpm build`：Web、API、Runtime、Worker 与共享包全部通过
@@ -194,7 +195,7 @@ MySQL 没有 PostgreSQL 的 Row-Level Security。所有租户查询必须显式�
 - 真实 RAGFlow E2E：临时知识库上传 MD/TXT/PDF/DOCX，四篇均 `ready`；RAGFlow retrieval `code=0`，四个唯一口令全部命中；删除 204 且 dataset 已清理
 - 真实 ACL：临时 deny 后王芳从 allowed 变为 `explicit_deny`，内部 scope 立即不含该文档；随后恢复原例外
 - 启动冒烟：API `/api/health` 200、Runtime `/internal/health` 200、内部接口无 secret 401、Worker 输出 `worker_started`
-- Agent + 真实 LLM 回答/引用未验证：本机已有模型配置，仍需实际跑通对话与引用；登录流程不作为本次验收重点
+- Agent + 真实 LLM 回答/引用未验证：本机已有企业共享模型配置，仍需实际跑通对话与引用；登录流程不作为本次验收重点
 - 完整 LLM 联网回答未验证：本地已配置 Tavily，工具级真实搜索已验证；仍需真实模型验证回答与网页引用
 
 UI 视觉、响应式、明暗主题、abort/retry、Runtime 重启后续聊仍待人工验收。`pnpm check` 目前会对 `packages/db/drizzle/meta/*.json` 报 Biome 格式差异，`pnpm lint` 通过。

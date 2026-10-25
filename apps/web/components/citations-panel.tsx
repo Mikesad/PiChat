@@ -139,18 +139,6 @@ export function CitationsPanel({
           </details>
         ) : null}
       </div>
-
-      <div className="shrink-0 border-t border-border p-3">
-        <div className="rounded-xl bg-surface-2 p-3">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
-            <Icon name="lock" size={13} className="text-subtle" />
-            权限范围
-          </p>
-          <p className="mt-1.5 text-[11px] leading-5 text-subtle">
-            仅展示当前账号有权阅读的文档。权限变更后，下一次提问立即生效。
-          </p>
-        </div>
-      </div>
     </div>
   );
 }

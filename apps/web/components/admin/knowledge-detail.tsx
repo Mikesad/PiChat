@@ -47,7 +47,7 @@ import { UploadDrawer } from "./upload-drawer";
 import { useApiErrorHandler } from "./use-api-error";
 
 type TabId = "documents" | "access" | "settings";
-type StatusFilter = "all" | "pending" | "ready" | "parsing" | "failed" | "no-access" | "exceptions";
+type StatusFilter = "all" | "pending" | "ready" | "parsing" | "failed" | "exceptions";
 
 const filters: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部" },
@@ -55,8 +55,7 @@ const filters: Array<{ id: StatusFilter; label: string }> = [
   { id: "ready", label: "可检索" },
   { id: "parsing", label: "解析中" },
   { id: "failed", label: "解析失败" },
-  { id: "no-access", label: "无人可访问" },
-  { id: "exceptions", label: "有例外" },
+  { id: "exceptions", label: "有文档级权限" },
 ];
 
 function reparseLabel(status: AdminDocument["status"]) {
@@ -164,18 +163,12 @@ export function KnowledgeDetailPage({ knowledgeBaseId }: { knowledgeBaseId: stri
         title={knowledgeBase.name}
         description={knowledgeBase.description}
         actions={
-          <>
-            <LinkButton href="/permissions">
-              <Icon name="shield-check" size={14} />
-              文档权限
-            </LinkButton>
-            {knowledgeBase.canManageAcl ? (
-              <Button onClick={() => setUploadOpen(true)}>
-                <Icon name="upload" size={14} />
-                上传文档
-              </Button>
-            ) : null}
-          </>
+          knowledgeBase.canManageAcl ? (
+            <Button onClick={() => setUploadOpen(true)}>
+              <Icon name="upload" size={14} />
+              上传文档
+            </Button>
+          ) : null
         }
       />
 
@@ -304,9 +297,6 @@ function DocumentsTab({
   const rows = knowledgeBase.documents.filter((document) => {
     if (normalized && !document.title.toLowerCase().includes(normalized)) {
       return false;
-    }
-    if (statusFilter === "no-access") {
-      return document.effectiveReaderCount === 0;
     }
     if (statusFilter === "exceptions") {
       return document.exceptions.length > 0;
@@ -489,7 +479,7 @@ function DocumentsTab({
                   <th className={thClass}>文档</th>
                   <th className={thClass}>状态</th>
                   <th className={thClass}>可见范围</th>
-                  <th className={thClass}>例外</th>
+                  <th className={thClass}>文档级权限</th>
                   <th className={`${thClass} hidden xl:table-cell`}>更新</th>
                   <th className={thClass}>
                     <span className="sr-only">操作</span>
@@ -583,7 +573,7 @@ function DocumentsTab({
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void handleDeleteDocument()}
         title="删除文档？"
-        description={`将删除「${deleteTarget?.title ?? ""}」及其全部文档例外，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。`}
+        description={`将删除「${deleteTarget?.title ?? ""}」及其全部文档级权限，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。`}
         confirmLabel={deleting ? "删除中…" : "删除文档"}
         tone="danger"
       />
@@ -593,7 +583,7 @@ function DocumentsTab({
         onClose={() => setBulkDeleteOpen(false)}
         onConfirm={() => void handleBulkDelete()}
         title={`删除选中的 ${selectedIds.length} 篇文档？`}
-        description="将软删除这些文档及其全部文档例外，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。"
+        description="将软删除这些文档及其全部文档级权限，并从检索范围中移除。RAGFlow 与本地文件会尽力清理，失败会记录审计。"
         confirmLabel={deleting ? "删除中…" : "删除文档"}
         tone="danger"
       />
@@ -729,7 +719,7 @@ function DocumentRow({
           )}
           {canManage ? (
             <>
-              <IconButton label="管理与权限" icon="shield-check" onClick={onOpenAcl} />
+              <IconButton label="管理与权限" icon="lock" onClick={onOpenAcl} />
               <IconButton
                 label={retrying ? "正在提交解析" : reparseLabel(document.status)}
                 icon="refresh"
@@ -829,7 +819,7 @@ function MobileDocumentCard({
         ) : (
           <span className="text-fg">{document.effectiveReaderCount} 人可读</span>
         )}
-        <span>{exceptionCount} 条文档例外</span>
+        <span>{exceptionCount} 条文档级权限</span>
         {denyCount > 0 ? <span className="text-danger">{denyCount} 条拒绝</span> : null}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -847,7 +837,7 @@ function MobileDocumentCard({
         {canManage ? (
           <>
             <Button size="sm" variant="secondary" onClick={onOpenAcl}>
-              <Icon name="shield-check" size={13} />
+              <Icon name="lock" size={13} />
               管理权限
             </Button>
             <Button size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
@@ -1011,7 +1001,7 @@ function AccessTab({
           {subjects.length === 0 ? (
             <div className="mt-3">
               <InfoBanner tone="warning" icon="lock" title="未设置默认范围">
-                普通成员默认无法读取该知识库中的文档；可单独添加文档级读取例外，但知识库级禁止无法被覆盖。
+                普通成员默认无法读取该知识库中的文档；可单独添加文档级读取权限，但知识库级禁止无法被覆盖。
               </InfoBanner>
             </div>
           ) : (
@@ -1067,9 +1057,9 @@ function AccessTab({
       <div className="rounded-xl border border-border bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <div>
-            <h2 className="text-sm font-medium text-fg">文档例外</h2>
+            <h2 className="text-sm font-medium text-fg">文档级权限</h2>
             <p className="mt-0.5 text-[11px] text-subtle">
-              {docsWithExceptions.length} 篇文档有独立权限
+              {docsWithExceptions.length} 篇文档有文档级权限
             </p>
           </div>
           <LinkButton href="/permissions" size="sm">
@@ -1079,7 +1069,7 @@ function AccessTab({
         </div>
         {docsWithExceptions.length === 0 ? (
           <p className="px-4 py-5 text-xs text-subtle">
-            没有文档例外。所有文档只应用知识库默认范围。
+            没有文档级权限。所有文档只应用知识库默认范围。
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -1092,7 +1082,8 @@ function AccessTab({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm text-fg">{document.title}</p>
                     <p className="mt-0.5 text-[11px] text-subtle">
-                      {document.effectiveReaderCount} 人可读 · {document.exceptions.length} 条例外
+                      {document.effectiveReaderCount} 人可读 · {document.exceptions.length}{" "}
+                      条文档级权限
                       {denyCount > 0 ? ` · ${denyCount} 条拒绝` : ""}
                     </p>
                   </div>
@@ -1112,7 +1103,7 @@ function AccessTab({
       {noAccessDocuments.length > 0 ? (
         <InfoBanner tone="warning" icon="alert-circle" title="有文档没有任何活跃用户可读">
           {noAccessDocuments.length}{" "}
-          篇文档当前没有有效读者。请确认默认范围；若存在知识库级禁止，文档读取例外无法覆盖。
+          篇文档当前没有有效读者。请确认默认范围；若存在知识库级禁止，文档级读取权限无法覆盖。
         </InfoBanner>
       ) : null}
 
@@ -1121,7 +1112,7 @@ function AccessTab({
         onClose={() => setConfirmOpen(false)}
         onConfirm={handleSave}
         title="保存知识库访问范围？"
-        description={`将影响 ${knowledgeBase.documents.length} 篇文档。禁止优先于允许，并覆盖文档读取例外；保存后由服务端重新计算权限，并在下一次提问时生效。`}
+        description={`将影响 ${knowledgeBase.documents.length} 篇文档。禁止优先于允许，并覆盖文档级读取权限；保存后由服务端重新计算权限，并在下一次提问时生效。`}
         confirmLabel={subjects.length === 0 ? "保存并清空访问范围" : "保存访问范围"}
         tone={subjects.length === 0 ? "danger" : "primary"}
       />
@@ -1150,11 +1141,12 @@ function SettingsTab({
   const [retrievalVectorWeight, setRetrievalVectorWeight] = useState(
     knowledgeBase.retrievalVectorWeight,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ field: "name" | "retrieval"; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  const canEdit = knowledgeBase.canManageAcl;
   const dirty =
     name !== knowledgeBase.name ||
     description !== knowledgeBase.description ||
@@ -1163,13 +1155,23 @@ function SettingsTab({
     retrievalSimilarityThreshold !== knowledgeBase.retrievalSimilarityThreshold ||
     retrievalVectorWeight !== knowledgeBase.retrievalVectorWeight;
 
+  function handleReset() {
+    setName(knowledgeBase.name);
+    setDescription(knowledgeBase.description);
+    setOwnerDepartmentId(knowledgeBase.ownerDepartmentId ?? "");
+    setRetrievalTopK(knowledgeBase.retrievalTopK);
+    setRetrievalSimilarityThreshold(knowledgeBase.retrievalSimilarityThreshold);
+    setRetrievalVectorWeight(knowledgeBase.retrievalVectorWeight);
+    setError(null);
+  }
+
   async function handleSave() {
     if (name.trim().length < 2) {
-      setError("名称至少需要 2 个字符");
+      setError({ field: "name", message: "名称至少需要 2 个字符" });
       return;
     }
     if (!Number.isFinite(retrievalTopK) || retrievalTopK < 1 || retrievalTopK > 12) {
-      setError("Top-K 必须是 1 到 12 之间的整数");
+      setError({ field: "retrieval", message: "Top-K 必须是 1 到 12 之间的整数" });
       return;
     }
     if (
@@ -1177,7 +1179,7 @@ function SettingsTab({
       retrievalSimilarityThreshold < 0 ||
       retrievalSimilarityThreshold > 1
     ) {
-      setError("相似度阈值必须在 0 到 1 之间");
+      setError({ field: "retrieval", message: "相似度阈值必须在 0 到 1 之间" });
       return;
     }
     if (
@@ -1185,21 +1187,27 @@ function SettingsTab({
       retrievalVectorWeight < 0 ||
       retrievalVectorWeight > 1
     ) {
-      setError("向量权重必须在 0 到 1 之间");
+      setError({ field: "retrieval", message: "向量权重必须在 0 到 1 之间" });
       return;
     }
 
     setError(null);
     setSaving(true);
     try {
+      const nextName = name.trim();
+      const nextDescription = description.trim();
+      const nextTopK = Math.round(retrievalTopK);
       await updateKnowledgeBase(knowledgeBase.id, {
-        name: name.trim(),
-        description,
+        name: nextName,
+        description: nextDescription,
         ownerDepartmentId: ownerDepartmentId || null,
-        retrievalTopK: Math.round(retrievalTopK),
+        retrievalTopK: nextTopK,
         retrievalSimilarityThreshold,
         retrievalVectorWeight,
       });
+      setName(nextName);
+      setDescription(nextDescription);
+      setRetrievalTopK(nextTopK);
       showToast("知识库设置已保存");
     } catch (cause) {
       await handleApiError(cause);
@@ -1225,12 +1233,48 @@ function SettingsTab({
     }
   }
 
+  const readOnlyItems: Array<{
+    label: string;
+    value: string;
+    mono?: boolean;
+    tabular?: boolean;
+  }> = [
+    { label: "Embedding 模型", value: knowledgeBase.embeddingModel },
+    { label: "RAGFlow 数据集", value: knowledgeBase.ragflowDatasetId, mono: true },
+    {
+      label: "创建者",
+      value:
+        members.find((member) => member.id === knowledgeBase.ownerId)?.displayName ??
+        knowledgeBase.ownerId ??
+        "—",
+    },
+    { label: "创建时间", value: knowledgeBase.createdAt.slice(0, 10) },
+    { label: "最近变更", value: knowledgeBase.updatedLabel },
+    { label: "ACL 版本", value: String(knowledgeBase.aclVersion), tabular: true },
+  ];
+
+  const saveStatus = !canEdit
+    ? { tone: "bg-subtle", text: "当前角色为只读，无法修改设置。" }
+    : saving
+      ? { tone: "bg-accent", text: "正在保存设置…" }
+      : dirty
+        ? { tone: "bg-warning", text: "有未保存的修改。" }
+        : { tone: "bg-success", text: "设置已保存，所有更改已同步。" };
+
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-border bg-surface p-4 sm:p-5">
-        <h2 className="text-sm font-medium text-fg">基本信息</h2>
-        <div className="mt-3 max-w-2xl space-y-4">
-          <FormField id="settings-name" label="名称" required error={error ?? undefined}>
+    <div className="space-y-3">
+      <section className="overflow-hidden rounded-xl border border-border bg-surface">
+        <div className="border-b border-border px-4 py-3 sm:px-5">
+          <h2 className="text-sm font-semibold text-fg">基本信息</h2>
+          <p className="mt-0.5 text-xs text-muted">用于列表展示和归属管理，不改变文档访问权限。</p>
+        </div>
+        <div className="grid max-w-3xl items-start gap-3 p-4 sm:grid-cols-2 sm:px-5">
+          <FormField
+            id="settings-name"
+            label="名称"
+            required
+            error={error?.field === "name" ? error.message : undefined}
+          >
             <input
               id="settings-name"
               value={name}
@@ -1238,32 +1282,22 @@ function SettingsTab({
                 setName(event.target.value);
                 setError(null);
               }}
-              disabled={!knowledgeBase.canManageAcl}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "settings-name-error" : undefined}
+              disabled={!canEdit || saving}
+              aria-invalid={error?.field === "name" ? true : undefined}
+              aria-describedby={error?.field === "name" ? "settings-name-error" : undefined}
               className={inputClass}
-            />
-          </FormField>
-          <FormField id="settings-description" label="描述">
-            <textarea
-              id="settings-description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              disabled={!knowledgeBase.canManageAcl}
-              rows={3}
-              className={textareaClass}
             />
           </FormField>
           <FormField
             id="settings-department"
             label="归属部门"
-            hint="仅用于归属展示与筛选，不会自动改变任何文档的访问权限。"
+            hint="仅用于归属展示与筛选，不影响文档访问权限。"
           >
             <select
               id="settings-department"
               value={ownerDepartmentId}
               onChange={(event) => setOwnerDepartmentId(event.target.value)}
-              disabled={!knowledgeBase.canManageAcl}
+              disabled={!canEdit || saving}
               className={selectClass}
             >
               <option value="">未设置</option>
@@ -1274,126 +1308,198 @@ function SettingsTab({
               ))}
             </select>
           </FormField>
-          <div className="flex justify-end">
-            <Button
-              onClick={() => void handleSave()}
-              disabled={!dirty || saving || !knowledgeBase.canManageAcl}
-            >
-              {saving ? "保存中…" : "保存设置"}
+          <div className="sm:col-span-2">
+            <FormField id="settings-description" label="描述">
+              <textarea
+                id="settings-description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                disabled={!canEdit || saving}
+                rows={3}
+                className={textareaClass}
+              />
+            </FormField>
+          </div>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-border bg-surface">
+        <div className="border-b border-border px-4 py-3 sm:px-5">
+          <h2 className="text-sm font-semibold text-fg">检索配置</h2>
+          <p className="mt-0.5 text-xs text-muted">
+            Embedding 模型和数据集在创建时确定；检索参数会应用到下一次提问。
+          </p>
+        </div>
+        <div className="p-4 sm:px-5 sm:py-4">
+          <div className="rounded-lg border border-border bg-surface-2/50 p-3.5">
+            <div className="flex items-center gap-1.5">
+              <Icon name="lock" size={12} className="text-subtle" />
+              <h3 className="text-[11px] font-semibold tracking-wide text-subtle">只读信息</h3>
+            </div>
+            <dl className="mt-2.5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+              {readOnlyItems.map((item) => (
+                <div key={item.label} className="min-w-0">
+                  <dt className="text-[11px] font-medium text-subtle">{item.label}</dt>
+                  <dd
+                    className={cn(
+                      "mt-0.5 text-[13px] leading-5 text-fg",
+                      item.mono && "break-all font-mono text-[11px]",
+                      item.tabular && "tabular-nums",
+                    )}
+                  >
+                    {item.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-[11px] font-semibold tracking-wide text-subtle">检索参数</h3>
+              <span className="text-[11px] text-subtle">修改后下一次提问生效</span>
+            </div>
+            <div className="mt-2 grid max-w-3xl gap-3 sm:grid-cols-3">
+              <FormField id="settings-top-k" label="Top-K">
+                <input
+                  id="settings-top-k"
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={retrievalTopK}
+                  onChange={(event) => {
+                    setRetrievalTopK(Number(event.target.value));
+                    setError(null);
+                  }}
+                  disabled={!canEdit || saving}
+                  aria-invalid={error?.field === "retrieval" ? true : undefined}
+                  aria-describedby={
+                    error?.field === "retrieval" ? "settings-retrieval-error" : undefined
+                  }
+                  className={inputClass}
+                />
+              </FormField>
+              <FormField id="settings-threshold" label="相似度阈值">
+                <input
+                  id="settings-threshold"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={retrievalSimilarityThreshold}
+                  onChange={(event) => {
+                    setRetrievalSimilarityThreshold(Number(event.target.value));
+                    setError(null);
+                  }}
+                  disabled={!canEdit || saving}
+                  aria-invalid={error?.field === "retrieval" ? true : undefined}
+                  aria-describedby={
+                    error?.field === "retrieval" ? "settings-retrieval-error" : undefined
+                  }
+                  className={inputClass}
+                />
+              </FormField>
+              <FormField id="settings-vector-weight" label="向量权重">
+                <input
+                  id="settings-vector-weight"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={retrievalVectorWeight}
+                  onChange={(event) => {
+                    setRetrievalVectorWeight(Number(event.target.value));
+                    setError(null);
+                  }}
+                  disabled={!canEdit || saving}
+                  aria-invalid={error?.field === "retrieval" ? true : undefined}
+                  aria-describedby={
+                    error?.field === "retrieval" ? "settings-retrieval-error" : undefined
+                  }
+                  className={inputClass}
+                />
+              </FormField>
+            </div>
+            {error?.field === "retrieval" ? (
+              <p
+                id="settings-retrieval-error"
+                role="alert"
+                className="mt-2 flex items-center gap-1.5 text-xs text-danger"
+              >
+                <Icon name="alert-circle" size={13} />
+                {error.message}
+              </p>
+            ) : null}
+            <p className="mt-2 text-[11px] leading-5 text-subtle">
+              向量权重越高越偏向语义检索；越低越偏向关键词检索。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex items-center gap-2 text-xs text-muted" aria-live="polite">
+          <span
+            className={cn("size-1.5 shrink-0 rounded-full", saveStatus.tone)}
+            aria-hidden="true"
+          />
+          <span>{saveStatus.text}</span>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          {dirty && !saving && canEdit ? (
+            <Button variant="ghost" size="sm" onClick={handleReset}>
+              放弃修改
             </Button>
-          </div>
+          ) : null}
+          <Button
+            onClick={() => void handleSave()}
+            disabled={!dirty || saving || !canEdit}
+            className="min-w-[104px]"
+          >
+            {saving ? <Spinner className="size-3.5" /> : null}
+            {saving ? "保存中…" : "保存设置"}
+          </Button>
         </div>
       </div>
 
-      <div className="rounded-xl border border-border bg-surface p-4 sm:p-5">
-        <h2 className="text-sm font-medium text-fg">检索配置</h2>
-        <dl className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div>
-            <dt className="text-[11px] text-subtle">Embedding 模型</dt>
-            <dd className="mt-1 text-sm text-fg">{knowledgeBase.embeddingModel}</dd>
+      <section className="rounded-xl border border-border bg-surface p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-danger-soft text-danger">
+              <Icon name="triangle-alert" size={15} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-fg">危险操作</h2>
+              <p className="mt-1 text-xs leading-5 text-muted">
+                删除后会同时移除其中的 {knowledgeBase.documents.length}{" "}
+                篇文档、全部知识库默认权限与文档级权限，请谨慎操作。
+              </p>
+            </div>
           </div>
-          <div>
-            <dt className="text-[11px] text-subtle">RAGFlow 数据集</dt>
-            <dd className="mt-1 font-mono text-xs text-fg">{knowledgeBase.ragflowDatasetId}</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] text-subtle">创建者</dt>
-            <dd className="mt-1 text-sm text-fg">
-              {members.find((member) => member.id === knowledgeBase.ownerId)?.displayName ??
-                knowledgeBase.ownerId ??
-                "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[11px] text-subtle">创建时间</dt>
-            <dd className="mt-1 text-sm text-fg">{knowledgeBase.createdAt.slice(0, 10)}</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] text-subtle">最近变更</dt>
-            <dd className="mt-1 text-sm text-fg">{knowledgeBase.updatedLabel}</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] text-subtle">ACL 版本</dt>
-            <dd className="mt-1 text-sm tabular-nums text-fg">{knowledgeBase.aclVersion}</dd>
-          </div>
-        </dl>
-        <div className="mt-5 grid max-w-3xl gap-3 sm:grid-cols-3">
-          <FormField id="settings-top-k" label="Top-K">
-            <input
-              id="settings-top-k"
-              type="number"
-              min={1}
-              max={12}
-              value={retrievalTopK}
-              onChange={(event) => {
-                setRetrievalTopK(Number(event.target.value));
-                setError(null);
-              }}
-              disabled={!knowledgeBase.canManageAcl}
-              className={inputClass}
-            />
-          </FormField>
-          <FormField id="settings-threshold" label="相似度阈值">
-            <input
-              id="settings-threshold"
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={retrievalSimilarityThreshold}
-              onChange={(event) => {
-                setRetrievalSimilarityThreshold(Number(event.target.value));
-                setError(null);
-              }}
-              disabled={!knowledgeBase.canManageAcl}
-              className={inputClass}
-            />
-          </FormField>
-          <FormField id="settings-vector-weight" label="向量权重">
-            <input
-              id="settings-vector-weight"
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={retrievalVectorWeight}
-              onChange={(event) => {
-                setRetrievalVectorWeight(Number(event.target.value));
-                setError(null);
-              }}
-              disabled={!knowledgeBase.canManageAcl}
-              className={inputClass}
-            />
-          </FormField>
-        </div>
-        <p className="mt-2 text-[11px] text-subtle">
-          向量权重越高越偏向语义检索；越低越偏向关键词检索。修改后下一次提问生效。
-        </p>
-      </div>
-
-      <div className="rounded-xl border border-danger/30 bg-danger-soft/40 p-4 sm:p-5">
-        <h2 className="text-sm font-medium text-fg">危险操作</h2>
-        <p className="mt-1 text-xs leading-5 text-muted">
-          删除知识库会同时移除其中的 {knowledgeBase.documents.length} 篇文档及全部文档权限规则。
-        </p>
-        {knowledgeBase.canManageAcl ? (
-          <div className="mt-3">
-            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+          {canEdit ? (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+              className="self-start sm:self-auto"
+            >
               <Icon name="trash" size={14} />
               删除知识库
             </Button>
-          </div>
-        ) : (
-          <p className="mt-3 text-xs text-subtle">当前角色只读。</p>
-        )}
-      </div>
+          ) : (
+            <Badge tone="neutral" className="self-start sm:self-auto">
+              只读
+            </Badge>
+          )}
+        </div>
+      </section>
 
       <ConfirmDialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         onConfirm={() => void handleDelete()}
         title="删除知识库？"
-        description={`将软删除「${knowledgeBase.name}」及其 ${knowledgeBase.documents.length} 篇文档、全部知识库默认权限与文档例外。RAGFlow 数据集和本地文件会尽力清理，失败会记录审计。`}
+        description={`将软删除「${knowledgeBase.name}」及其 ${knowledgeBase.documents.length} 篇文档、全部知识库默认权限与文档级权限。RAGFlow 数据集和本地文件会尽力清理，失败会记录审计。`}
         confirmLabel={deleting ? "删除中…" : "删除知识库"}
         tone="danger"
         requireText={knowledgeBase.name}

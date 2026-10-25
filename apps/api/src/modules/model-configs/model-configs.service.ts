@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database, ModelConfig } from "@pichat/db";
-import { modelConfigs } from "@pichat/db";
+import { modelConfigs, users } from "@pichat/db";
 import type {
   CreateModelConfigRequest,
   ModelConfigSummary,
@@ -11,10 +11,11 @@ import type {
   UpdateModelConfigRequest,
 } from "@pichat/shared";
 import { modelProviders } from "@pichat/shared";
-import { and, desc, eq, ne } from "drizzle-orm";
-import { conflict, notFound } from "../../common/api-error";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { conflict, forbidden, notFound } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
 import type { ModelConfigCrypto } from "../../common/model-config-crypto";
+import { canManageSharedConfigs } from "../../common/permissions";
 import { MODEL_CONFIG_CRYPTO } from "./model-config-crypto.provider";
 
 export interface ResolvedModelConfig {
@@ -34,10 +35,7 @@ export class ModelConfigsService {
   ) {}
 
   async list(principal: SessionUser, kind?: ModelKind): Promise<ModelConfigSummary[]> {
-    const conditions = [
-      eq(modelConfigs.tenantId, principal.tenantId),
-      eq(modelConfigs.userId, principal.id),
-    ];
+    const conditions = [eq(modelConfigs.tenantId, principal.tenantId)];
     if (kind) {
       conditions.push(eq(modelConfigs.kind, kind));
     }
@@ -47,14 +45,22 @@ export class ModelConfigsService {
       .from(modelConfigs)
       .where(and(...conditions))
       .orderBy(desc(modelConfigs.isDefault), desc(modelConfigs.updatedAt));
+    const creatorNames = await this.loadCreatorNames(
+      principal.tenantId,
+      rows.map((row) => row.userId),
+    );
 
-    return rows.map((row) => this.toSummary(row));
+    return rows.map((row) =>
+      this.toSummary(row, row.userId ? (creatorNames.get(row.userId) ?? null) : null),
+    );
   }
 
   async create(
     principal: SessionUser,
     input: CreateModelConfigRequest,
   ): Promise<ModelConfigSummary> {
+    this.assertCanManage(principal);
+
     const duplicate = await this.findByProviderModel(
       principal,
       input.kind,
@@ -75,11 +81,7 @@ export class ModelConfigsService {
           .update(modelConfigs)
           .set({ isDefault: false })
           .where(
-            and(
-              eq(modelConfigs.tenantId, principal.tenantId),
-              eq(modelConfigs.userId, principal.id),
-              eq(modelConfigs.kind, input.kind),
-            ),
+            and(eq(modelConfigs.tenantId, principal.tenantId), eq(modelConfigs.kind, input.kind)),
           );
       }
 
@@ -99,13 +101,7 @@ export class ModelConfigsService {
       const rows = await tx
         .select()
         .from(modelConfigs)
-        .where(
-          and(
-            eq(modelConfigs.id, id),
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -113,7 +109,7 @@ export class ModelConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async update(
@@ -121,7 +117,9 @@ export class ModelConfigsService {
     id: string,
     input: UpdateModelConfigRequest,
   ): Promise<ModelConfigSummary> {
-    const existing = await this.findOwned(principal, id);
+    this.assertCanManage(principal);
+
+    const existing = await this.findById(principal, id);
     if (!existing) {
       throw notFound();
     }
@@ -149,11 +147,7 @@ export class ModelConfigsService {
           .update(modelConfigs)
           .set({ isDefault: false })
           .where(
-            and(
-              eq(modelConfigs.tenantId, principal.tenantId),
-              eq(modelConfigs.userId, principal.id),
-              eq(modelConfigs.kind, input.kind),
-            ),
+            and(eq(modelConfigs.tenantId, principal.tenantId), eq(modelConfigs.kind, input.kind)),
           );
       }
 
@@ -168,24 +162,12 @@ export class ModelConfigsService {
           encryptedApiKey,
           ...(makeDefault ? { isDefault: true } : {}),
         })
-        .where(
-          and(
-            eq(modelConfigs.id, id),
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-          ),
-        );
+        .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)));
 
       const rows = await tx
         .select()
         .from(modelConfigs)
-        .where(
-          and(
-            eq(modelConfigs.id, id),
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -193,26 +175,24 @@ export class ModelConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async remove(principal: SessionUser, id: string): Promise<void> {
+    this.assertCanManage(principal);
+
     const result = await this.db
       .delete(modelConfigs)
-      .where(
-        and(
-          eq(modelConfigs.id, id),
-          eq(modelConfigs.tenantId, principal.tenantId),
-          eq(modelConfigs.userId, principal.id),
-        ),
-      );
+      .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)));
     if (result[0].affectedRows === 0) {
       throw notFound();
     }
   }
 
   async setDefault(principal: SessionUser, id: string): Promise<ModelConfigSummary> {
-    const existing = await this.findOwned(principal, id);
+    this.assertCanManage(principal);
+
+    const existing = await this.findById(principal, id);
     if (!existing) {
       throw notFound();
     }
@@ -222,34 +202,18 @@ export class ModelConfigsService {
         .update(modelConfigs)
         .set({ isDefault: false })
         .where(
-          and(
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-            eq(modelConfigs.kind, existing.kind),
-          ),
+          and(eq(modelConfigs.tenantId, principal.tenantId), eq(modelConfigs.kind, existing.kind)),
         );
 
       await tx
         .update(modelConfigs)
         .set({ isDefault: true })
-        .where(
-          and(
-            eq(modelConfigs.id, id),
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-          ),
-        );
+        .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)));
 
       const rows = await tx
         .select()
         .from(modelConfigs)
-        .where(
-          and(
-            eq(modelConfigs.id, id),
-            eq(modelConfigs.tenantId, principal.tenantId),
-            eq(modelConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -257,7 +221,7 @@ export class ModelConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async resolveForRun(
@@ -266,7 +230,7 @@ export class ModelConfigsService {
   ): Promise<ResolvedModelConfig> {
     const resolved = await this.resolveOptionalForKind(principal, "chat", modelConfigId);
     if (!resolved) {
-      throw conflict("请先在账号菜单中配置可用模型");
+      throw conflict("尚未配置可用模型，请联系企业管理员");
     }
     return resolved;
   }
@@ -279,7 +243,7 @@ export class ModelConfigsService {
     let row: ModelConfig | null = null;
 
     if (modelConfigId) {
-      row = await this.findOwned(principal, modelConfigId);
+      row = await this.findById(principal, modelConfigId);
       if (!row || row.kind !== kind) {
         throw notFound();
       }
@@ -329,7 +293,6 @@ export class ModelConfigsService {
       .where(
         and(
           eq(modelConfigs.tenantId, principal.tenantId),
-          eq(modelConfigs.userId, principal.id),
           eq(modelConfigs.kind, kind),
           eq(modelConfigs.isDefault, true),
           eq(modelConfigs.enabled, true),
@@ -346,7 +309,6 @@ export class ModelConfigsService {
       .where(
         and(
           eq(modelConfigs.tenantId, principal.tenantId),
-          eq(modelConfigs.userId, principal.id),
           eq(modelConfigs.kind, kind),
           eq(modelConfigs.enabled, true),
         ),
@@ -356,17 +318,11 @@ export class ModelConfigsService {
     return fallbackRows[0] ?? null;
   }
 
-  private async findOwned(principal: SessionUser, id: string): Promise<ModelConfig | null> {
+  private async findById(principal: SessionUser, id: string): Promise<ModelConfig | null> {
     const rows = await this.db
       .select()
       .from(modelConfigs)
-      .where(
-        and(
-          eq(modelConfigs.id, id),
-          eq(modelConfigs.tenantId, principal.tenantId),
-          eq(modelConfigs.userId, principal.id),
-        ),
-      )
+      .where(and(eq(modelConfigs.id, id), eq(modelConfigs.tenantId, principal.tenantId)))
       .limit(1);
     return rows[0] ?? null;
   }
@@ -380,7 +336,6 @@ export class ModelConfigsService {
   ): Promise<ModelConfig | null> {
     const conditions = [
       eq(modelConfigs.tenantId, principal.tenantId),
-      eq(modelConfigs.userId, principal.id),
       eq(modelConfigs.kind, kind),
       eq(modelConfigs.provider, provider),
       eq(modelConfigs.modelId, modelId),
@@ -397,7 +352,34 @@ export class ModelConfigsService {
     return rows[0] ?? null;
   }
 
-  private toSummary(row: ModelConfig): ModelConfigSummary {
+  private async loadCreatorNames(
+    tenantId: string,
+    userIds: Array<string | null>,
+  ): Promise<Map<string, string>> {
+    const uniqueIds = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.db
+      .select({ id: users.id, displayName: users.displayName })
+      .from(users)
+      .where(and(eq(users.tenantId, tenantId), inArray(users.id, uniqueIds)));
+    return new Map(rows.map((row) => [row.id, row.displayName] as const));
+  }
+
+  private async toSummaryWithCreator(row: ModelConfig): Promise<ModelConfigSummary> {
+    const creatorNames = await this.loadCreatorNames(row.tenantId, row.userId ? [row.userId] : []);
+    return this.toSummary(row, row.userId ? (creatorNames.get(row.userId) ?? null) : null);
+  }
+
+  private assertCanManage(principal: SessionUser): void {
+    if (!canManageSharedConfigs(principal.role)) {
+      throw forbidden("只有企业管理员可以维护共享模型配置");
+    }
+  }
+
+  private toSummary(row: ModelConfig, createdByName: string | null): ModelConfigSummary {
     const hasApiKey = Boolean(row.encryptedApiKey && row.encryptedApiKey.length > 0);
     let apiKeyMasked = "";
     if (hasApiKey && row.encryptedApiKey) {
@@ -414,6 +396,8 @@ export class ModelConfigsService {
       isDefault: row.isDefault,
       hasApiKey,
       apiKeyMasked,
+      createdByUserId: row.userId,
+      createdByName,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };

@@ -184,7 +184,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       width="lg"
       title="模型配置"
-      description="这里配置对话模型；Embedding、ReRank 与搜索引擎可在管理端「模型配置」「搜索引擎」中维护。配置按账号保存在服务端，API Key 只返回脱敏信息。"
+      description="这里配置对话模型；Embedding、ReRank 与搜索引擎可在管理端「模型配置」「搜索引擎」中维护。配置在企业内共用，API Key 只返回脱敏信息。"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-subtle">API Key 由服务端加密保存，浏览器不持久化明文</p>
@@ -246,6 +246,9 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
                       <p className="mt-0.5 font-mono text-[10px] text-subtle">
                         {config.apiKeyMasked || "未保存密钥"}
                       </p>
+                      <p className="mt-0.5 truncate text-[10px] text-subtle">
+                        {config.createdByName ? `由 ${config.createdByName} 配置` : "创建人已删除"}
+                      </p>
                     </div>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -276,7 +279,7 @@ export function ModelConfigDrawer({ onClose }: { onClose: () => void }) {
         </section>
       ) : (
         <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs leading-5 text-subtle">
-          还没有配置模型。填写下方参数并保存后，输入框底部的模型选择器会切换到你配置的模型。
+          还没有配置模型。保存后，企业内所有成员都可以在对话中选择并使用该模型。
         </div>
       )}
 

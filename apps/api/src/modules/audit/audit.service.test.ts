@@ -134,6 +134,14 @@ describeWithDatabase("AuditService", () => {
     });
   });
 
+  it("reports audit timestamps as the actual event instant", async () => {
+    const result = await service.list(admin, { page: 1, pageSize: 50 });
+
+    for (const log of result.logs) {
+      expect(Math.abs(Date.now() - Date.parse(log.createdAt))).toBeLessThan(60_000);
+    }
+  });
+
   it("paginates audit logs with the default page size", async () => {
     const first = await service.list(admin, {});
     expect(first.pagination).toMatchObject({ page: 1, pageSize: 10, total: 3 });

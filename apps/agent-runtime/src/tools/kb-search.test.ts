@@ -21,6 +21,9 @@ const config: RuntimeConfig = {
     similarityThreshold: 0.2,
     answerSimilarityThreshold: 0.35,
     highSimilarityThreshold: 0.6,
+    rerankRecallThreshold: 0,
+    rerankAnswerSimilarityThreshold: 0.25,
+    rerankHighSimilarityThreshold: 0.6,
     vectorWeight: 0.3,
     maxSnippetChars: 1200,
     maxResultChars: 12_000,
@@ -108,6 +111,43 @@ function createContext() {
     chunks: new ChunkStore(ragflow),
     config,
   };
+}
+
+function createRerankContext(returnedChunks: RetrievalChunk[]) {
+  const context = createContext();
+  context.accessClient = {
+    async scope() {
+      return {
+        knowledgeBases: [
+          {
+            id: "kb-1",
+            name: "内部制度",
+            ragflowDatasetId: "ds-1",
+            retrieval: {
+              topK: 6,
+              similarityThreshold: 0.2,
+              vectorWeight: 0.3,
+              rerankModelId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+            },
+            documents: [{ id: "doc-1", title: "内部制度.pdf", ragflowDocumentId: "rf-doc-1" }],
+          },
+        ],
+      };
+    },
+    async check() {
+      return { allowed: true, reason: "allowed" as const };
+    },
+  } as unknown as AccessClient;
+
+  const retrieveCalls: Array<Record<string, unknown>> = [];
+  context.ragflow = {
+    async retrieve(input: Record<string, unknown>) {
+      retrieveCalls.push(input);
+      return returnedChunks;
+    },
+  } as unknown as RAGFlowClient;
+
+  return { context, retrieveCalls };
 }
 
 describe("kb_search tool", () => {
@@ -277,5 +317,102 @@ describe("kb_search tool", () => {
     expect(text).toContain("&lt;/kb_document&gt;");
     expect(text).toContain("&lt;kb_context&gt;");
     expect(text.match(/<kb_document /g)).toHaveLength(1);
+  });
+
+  it("uses rerank score for confidence and relaxes the retrieval threshold", async () => {
+    const { context, retrieveCalls } = createRerankContext([
+      {
+        id: "chunk-rerank-high",
+        content: "重排高分片段",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.1,
+        vectorSimilarity: 0.9,
+        termSimilarity: 0,
+        rerankScore: 0.9,
+      },
+    ]);
+    const tool = createKbSearchTool(context);
+
+    const result = await tool.execute(
+      "call-rerank-high",
+      { query: "住宿标准" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(retrieveCalls[0]).toMatchObject({
+      rerankId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+      similarityThreshold: 0,
+    });
+    expect((result.details as KbToolDetails).citations).toHaveLength(1);
+    expect(text).toContain('confidence="high"');
+  });
+
+  it("drops a chunk with a low rerank score even when hybrid similarity is high", async () => {
+    const { context } = createRerankContext([
+      {
+        id: "chunk-rerank-low",
+        content: "重排低分片段",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.9,
+        vectorSimilarity: 0.1,
+        termSimilarity: 0.1,
+        rerankScore: 0.1,
+      },
+    ]);
+    const tool = createKbSearchTool(context);
+
+    const result = await tool.execute(
+      "call-rerank-low",
+      { query: "住宿标准" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+
+    expect((result.details as KbToolDetails).citations).toHaveLength(0);
+  });
+
+  it("sorts merged results by rerank score when rerank is enabled", async () => {
+    const { context } = createRerankContext([
+      {
+        id: "chunk-hybrid-high",
+        content: "混合分高但重排分低",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.9,
+        vectorSimilarity: 0.3,
+        termSimilarity: 0.2,
+        rerankScore: 0.3,
+      },
+      {
+        id: "chunk-rerank-high",
+        content: "混合分低但重排分高",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.1,
+        vectorSimilarity: 0.9,
+        termSimilarity: 0,
+        rerankScore: 0.9,
+      },
+    ]);
+    const tool = createKbSearchTool(context);
+
+    const result = await tool.execute(
+      "call-rerank-sort",
+      { query: "住宿标准" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    const citations = (result.details as KbToolDetails).citations;
+
+    expect(citations).toHaveLength(2);
+    expect(citations[0]?.chunkId).toBe("chunk-rerank-high");
+    expect(citations[1]?.chunkId).toBe("chunk-hybrid-high");
   });
 });

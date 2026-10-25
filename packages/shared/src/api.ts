@@ -44,6 +44,7 @@ export interface SessionUser {
   displayName: string;
   role: UserRole;
   departmentId: string | null;
+  departmentName?: string | null;
 }
 
 export interface LoginRequest {
@@ -290,6 +291,8 @@ export interface ModelConfigSummary {
   isDefault: boolean;
   hasApiKey: boolean;
   apiKeyMasked: string;
+  createdByUserId: string | null;
+  createdByName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -331,6 +334,8 @@ export interface SearchConfigSummary {
   isDefault: boolean;
   hasApiKey: boolean;
   apiKeyMasked: string;
+  createdByUserId: string | null;
+  createdByName: string | null;
   createdAt: string;
   updatedAt: string;
 }

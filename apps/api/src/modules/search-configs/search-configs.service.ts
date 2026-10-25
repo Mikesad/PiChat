@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database, SearchConfig } from "@pichat/db";
-import { searchConfigs } from "@pichat/db";
+import { searchConfigs, users } from "@pichat/db";
 import type {
   CreateSearchConfigRequest,
   SearchConfigSummary,
@@ -14,10 +14,11 @@ import type {
   UpdateSearchConfigRequest,
 } from "@pichat/shared";
 import { searchEngineProviders } from "@pichat/shared";
-import { and, desc, eq, ne } from "drizzle-orm";
-import { conflict, notFound } from "../../common/api-error";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { conflict, forbidden, notFound } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
 import type { ModelConfigCrypto } from "../../common/model-config-crypto";
+import { canManageSharedConfigs } from "../../common/permissions";
 import { MODEL_CONFIG_CRYPTO } from "../model-configs/model-config-crypto.provider";
 
 const execFileAsync = promisify(execFile);
@@ -41,23 +42,27 @@ export class SearchConfigsService {
     const rows = await this.db
       .select()
       .from(searchConfigs)
-      .where(
-        and(eq(searchConfigs.tenantId, principal.tenantId), eq(searchConfigs.userId, principal.id)),
-      )
+      .where(eq(searchConfigs.tenantId, principal.tenantId))
       .orderBy(desc(searchConfigs.isDefault), desc(searchConfigs.updatedAt));
-    return rows.map((row) => this.toSummary(row));
+    const creatorNames = await this.loadCreatorNames(
+      principal.tenantId,
+      rows.map((row) => row.userId),
+    );
+    return rows.map((row) =>
+      this.toSummary(row, row.userId ? (creatorNames.get(row.userId) ?? null) : null),
+    );
   }
 
   async create(
     principal: SessionUser,
     input: CreateSearchConfigRequest,
   ): Promise<SearchConfigSummary> {
+    this.assertCanManage(principal);
+
     const existing = await this.db
       .select({ id: searchConfigs.id })
       .from(searchConfigs)
-      .where(
-        and(eq(searchConfigs.tenantId, principal.tenantId), eq(searchConfigs.userId, principal.id)),
-      )
+      .where(eq(searchConfigs.tenantId, principal.tenantId))
       .limit(1);
     const makeDefault = input.makeDefault === true || existing.length === 0;
 
@@ -67,12 +72,7 @@ export class SearchConfigsService {
         await tx
           .update(searchConfigs)
           .set({ isDefault: false })
-          .where(
-            and(
-              eq(searchConfigs.tenantId, principal.tenantId),
-              eq(searchConfigs.userId, principal.id),
-            ),
-          );
+          .where(eq(searchConfigs.tenantId, principal.tenantId));
       }
 
       await tx.insert(searchConfigs).values({
@@ -90,13 +90,7 @@ export class SearchConfigsService {
       const rows = await tx
         .select()
         .from(searchConfigs)
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -104,7 +98,7 @@ export class SearchConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async update(
@@ -112,7 +106,9 @@ export class SearchConfigsService {
     id: string,
     input: UpdateSearchConfigRequest,
   ): Promise<SearchConfigSummary> {
-    const existing = await this.findOwned(principal, id);
+    this.assertCanManage(principal);
+
+    const existing = await this.findById(principal, id);
     if (!existing) {
       throw notFound();
     }
@@ -128,12 +124,7 @@ export class SearchConfigsService {
         await tx
           .update(searchConfigs)
           .set({ isDefault: false })
-          .where(
-            and(
-              eq(searchConfigs.tenantId, principal.tenantId),
-              eq(searchConfigs.userId, principal.id),
-            ),
-          );
+          .where(eq(searchConfigs.tenantId, principal.tenantId));
       }
 
       await tx
@@ -146,24 +137,12 @@ export class SearchConfigsService {
           proxy: input.proxy?.trim() || null,
           ...(makeDefault ? { isDefault: true } : {}),
         })
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        );
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)));
 
       const rows = await tx
         .select()
         .from(searchConfigs)
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -171,11 +150,13 @@ export class SearchConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async remove(principal: SessionUser, id: string): Promise<void> {
-    const existing = await this.findOwned(principal, id);
+    this.assertCanManage(principal);
+
+    const existing = await this.findById(principal, id);
     if (!existing) {
       throw notFound();
     }
@@ -183,13 +164,7 @@ export class SearchConfigsService {
     await this.db.transaction(async (tx) => {
       await tx
         .delete(searchConfigs)
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        );
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)));
 
       if (!existing.isDefault) {
         return;
@@ -198,26 +173,24 @@ export class SearchConfigsService {
       const rows = await tx
         .select({ id: searchConfigs.id })
         .from(searchConfigs)
-        .where(
-          and(
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-            ne(searchConfigs.id, id),
-          ),
-        )
+        .where(and(eq(searchConfigs.tenantId, principal.tenantId), ne(searchConfigs.id, id)))
         .orderBy(desc(searchConfigs.updatedAt))
         .limit(1);
       if (rows[0]) {
         await tx
           .update(searchConfigs)
           .set({ isDefault: true })
-          .where(eq(searchConfigs.id, rows[0].id));
+          .where(
+            and(eq(searchConfigs.id, rows[0].id), eq(searchConfigs.tenantId, principal.tenantId)),
+          );
       }
     });
   }
 
   async setDefault(principal: SessionUser, id: string): Promise<SearchConfigSummary> {
-    const existing = await this.findOwned(principal, id);
+    this.assertCanManage(principal);
+
+    const existing = await this.findById(principal, id);
     if (!existing) {
       throw notFound();
     }
@@ -226,34 +199,17 @@ export class SearchConfigsService {
       await tx
         .update(searchConfigs)
         .set({ isDefault: false })
-        .where(
-          and(
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        );
+        .where(eq(searchConfigs.tenantId, principal.tenantId));
 
       await tx
         .update(searchConfigs)
         .set({ isDefault: true })
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        );
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)));
 
       const rows = await tx
         .select()
         .from(searchConfigs)
-        .where(
-          and(
-            eq(searchConfigs.id, id),
-            eq(searchConfigs.tenantId, principal.tenantId),
-            eq(searchConfigs.userId, principal.id),
-          ),
-        )
+        .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)))
         .limit(1);
       return rows[0];
     });
@@ -261,7 +217,7 @@ export class SearchConfigsService {
     if (!row) {
       throw notFound();
     }
-    return this.toSummary(row);
+    return this.toSummaryWithCreator(row);
   }
 
   async resolveForRun(principal: SessionUser): Promise<ResolvedSearchConfig | null> {
@@ -271,7 +227,6 @@ export class SearchConfigsService {
       .where(
         and(
           eq(searchConfigs.tenantId, principal.tenantId),
-          eq(searchConfigs.userId, principal.id),
           eq(searchConfigs.isDefault, true),
           eq(searchConfigs.enabled, true),
         ),
@@ -284,11 +239,7 @@ export class SearchConfigsService {
           .select()
           .from(searchConfigs)
           .where(
-            and(
-              eq(searchConfigs.tenantId, principal.tenantId),
-              eq(searchConfigs.userId, principal.id),
-              eq(searchConfigs.enabled, true),
-            ),
+            and(eq(searchConfigs.tenantId, principal.tenantId), eq(searchConfigs.enabled, true)),
           )
           .orderBy(desc(searchConfigs.updatedAt))
           .limit(1)
@@ -312,11 +263,13 @@ export class SearchConfigsService {
     principal: SessionUser,
     input: TestSearchConfigRequest,
   ): Promise<TestSearchConfigResponse> {
+    this.assertCanManage(principal);
+
     let apiKey = input.apiKey?.trim() ?? "";
     let proxy = input.proxy?.trim() ?? "";
 
     if (input.id) {
-      const existing = await this.findOwned(principal, input.id);
+      const existing = await this.findById(principal, input.id);
       if (!existing) {
         throw notFound();
       }
@@ -355,22 +308,43 @@ export class SearchConfigsService {
     }
   }
 
-  private async findOwned(principal: SessionUser, id: string): Promise<SearchConfig | null> {
+  private async findById(principal: SessionUser, id: string): Promise<SearchConfig | null> {
     const rows = await this.db
       .select()
       .from(searchConfigs)
-      .where(
-        and(
-          eq(searchConfigs.id, id),
-          eq(searchConfigs.tenantId, principal.tenantId),
-          eq(searchConfigs.userId, principal.id),
-        ),
-      )
+      .where(and(eq(searchConfigs.id, id), eq(searchConfigs.tenantId, principal.tenantId)))
       .limit(1);
     return rows[0] ?? null;
   }
 
-  private toSummary(row: SearchConfig): SearchConfigSummary {
+  private async loadCreatorNames(
+    tenantId: string,
+    userIds: Array<string | null>,
+  ): Promise<Map<string, string>> {
+    const uniqueIds = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.db
+      .select({ id: users.id, displayName: users.displayName })
+      .from(users)
+      .where(and(eq(users.tenantId, tenantId), inArray(users.id, uniqueIds)));
+    return new Map(rows.map((row) => [row.id, row.displayName] as const));
+  }
+
+  private async toSummaryWithCreator(row: SearchConfig): Promise<SearchConfigSummary> {
+    const creatorNames = await this.loadCreatorNames(row.tenantId, row.userId ? [row.userId] : []);
+    return this.toSummary(row, row.userId ? (creatorNames.get(row.userId) ?? null) : null);
+  }
+
+  private assertCanManage(principal: SessionUser): void {
+    if (!canManageSharedConfigs(principal.role)) {
+      throw forbidden("只有企业管理员可以维护共享搜索引擎配置");
+    }
+  }
+
+  private toSummary(row: SearchConfig, createdByName: string | null): SearchConfigSummary {
     const hasApiKey = Boolean(row.encryptedApiKey && row.encryptedApiKey.length > 0);
     const apiKeyMasked =
       hasApiKey && row.encryptedApiKey
@@ -386,6 +360,8 @@ export class SearchConfigsService {
       isDefault: row.isDefault,
       hasApiKey,
       apiKeyMasked,
+      createdByUserId: row.userId,
+      createdByName,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };

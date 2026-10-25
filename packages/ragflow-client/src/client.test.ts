@@ -164,12 +164,23 @@ describe("RAGFlow client", () => {
 
   it("sends rerank_id when a rerank model is configured", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({ chunks: [] }),
+      jsonResponse({
+        chunks: [
+          {
+            id: "chunk-1",
+            content: "内容",
+            document_id: "rf-doc-1",
+            similarity: 0.3,
+            vector_similarity: 0.82,
+            term_similarity: 0,
+          },
+        ],
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
-    await client.retrieve({
+    const chunks = await client.retrieve({
       question: "住宿标准",
       datasetIds: ["ds-1"],
       rerankId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
@@ -179,6 +190,37 @@ describe("RAGFlow client", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       rerank_id: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
     });
+    expect(chunks[0]).toMatchObject({
+      similarity: 0.3,
+      vectorSimilarity: 0.82,
+      rerankScore: 0.82,
+    });
+  });
+
+  it("does not expose a rerank score when rerank is disabled", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        chunks: [
+          {
+            id: "chunk-1",
+            content: "内容",
+            document_id: "rf-doc-1",
+            similarity: 0.3,
+            vector_similarity: 0.82,
+            term_similarity: 0,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new RAGFlowClient({ baseUrl: "http://ragflow", apiKey: "secret" });
+    const chunks = await client.retrieve({
+      question: "住宿标准",
+      datasetIds: ["ds-1"],
+    });
+
+    expect(chunks[0]?.rerankScore).toBeUndefined();
   });
 
   it("gets a single chunk from the dedicated endpoint", async () => {

@@ -23,6 +23,7 @@ export function UserMenu() {
 
   const name = user?.displayName ?? "未登录";
   const role = user ? roleLabels[user.role] : "—";
+  const department = user?.departmentName?.trim() || "未分配部门";
   const canConfigure = user?.role === "tenant_admin";
 
   useEffect(() => {
@@ -86,7 +87,9 @@ export function UserMenu() {
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{name}</p>
-          <p className="truncate text-[11px] text-subtle">{role}</p>
+          <p className="truncate text-[11px] text-subtle">
+            {department} · {role}
+          </p>
         </div>
         <Icon
           name="chevron-up"
@@ -137,7 +140,7 @@ export function UserMenu() {
         onClose={() => setLogoutOpen(false)}
         onConfirm={handleLogout}
         title="退出登录？"
-        description="当前会话将结束，并返回登录页面。模型配置保存在服务端账号下。"
+        description="当前会话将结束，并返回登录页面。模型配置保存在服务端企业共享配置中。"
         confirmLabel="退出登录"
         tone="danger"
       />

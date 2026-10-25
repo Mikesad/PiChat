@@ -120,19 +120,22 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
       const settled = await Promise.allSettled(
         scope.knowledgeBases.map((knowledgeBase) => {
           const knowledgeBaseTopK = topKFor(knowledgeBase);
+          const rerankId = knowledgeBase.retrieval?.rerankModelId;
+          const knowledgeBaseThreshold =
+            knowledgeBase.retrieval?.similarityThreshold ??
+            context.config.search.similarityThreshold;
+          const similarityThreshold = rerankId
+            ? Math.min(knowledgeBaseThreshold, context.config.search.rerankRecallThreshold)
+            : knowledgeBaseThreshold;
           return ragflow.retrieve({
             question: query,
             datasetIds: [knowledgeBase.ragflowDatasetId],
             documentIds: knowledgeBase.documents.map((document) => document.ragflowDocumentId),
             topK: Math.max(knowledgeBaseTopK * 2, knowledgeBaseTopK),
-            similarityThreshold:
-              knowledgeBase.retrieval?.similarityThreshold ??
-              context.config.search.similarityThreshold,
+            similarityThreshold,
             vectorSimilarityWeight:
               knowledgeBase.retrieval?.vectorWeight ?? context.config.search.vectorWeight,
-            ...(knowledgeBase.retrieval?.rerankModelId
-              ? { rerankId: knowledgeBase.retrieval.rerankModelId }
-              : {}),
+            ...(rerankId ? { rerankId } : {}),
           });
         }),
       );
@@ -168,7 +171,11 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
         selected.push({ chunk, meta });
       }
 
-      selected.sort((left, right) => right.chunk.similarity - left.chunk.similarity);
+      selected.sort(
+        (left, right) =>
+          (right.chunk.rerankScore ?? right.chunk.similarity) -
+          (left.chunk.rerankScore ?? left.chunk.similarity),
+      );
 
       const results: Array<{
         citation: ChatCitation;
@@ -180,7 +187,11 @@ export function createKbSearchTool(context: ToolRuntimeContext) {
         if (results.length >= finalTopK) {
           break;
         }
-        const confidence = classifyKbConfidence(item.chunk.similarity, context.config.search);
+        const confidence = classifyKbConfidence(
+          item.chunk.similarity,
+          context.config.search,
+          item.chunk.rerankScore,
+        );
         if (confidence === "low") {
           continue;
         }

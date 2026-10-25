@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 import { canViewAudit, canViewMembers, type UserRole } from "@/lib/admin-data";
-import type { KnowledgeBase, Session } from "@/lib/chat-data";
+import type { Session } from "@/lib/chat-data";
 import { cn } from "@/lib/utils";
 import { Icon, LogoMark } from "./icons";
 import { IconButton } from "./ui";
@@ -24,7 +24,6 @@ interface SidebarProps {
   activeSection?: AdminSection;
   sessions?: Session[];
   activeSessionId?: string;
-  knowledgeBases?: KnowledgeBase[];
   userRole?: UserRole;
   mobileOpen: boolean;
   onSelectSession?: (id: string) => void;
@@ -38,7 +37,6 @@ export function Sidebar({
   activeSection = "knowledge",
   sessions = [],
   activeSessionId = "",
-  knowledgeBases = [],
   userRole,
   mobileOpen,
   onSelectSession,
@@ -62,7 +60,6 @@ export function Sidebar({
           activeSection={activeSection}
           sessions={sessions}
           activeSessionId={activeSessionId}
-          knowledgeBases={knowledgeBases}
           userRole={userRole}
           onSelectSession={onSelectSession}
           onNewChat={onNewChat}
@@ -92,7 +89,6 @@ export function Sidebar({
               activeSection={activeSection}
               sessions={sessions}
               activeSessionId={activeSessionId}
-              knowledgeBases={knowledgeBases}
               onSelectSession={onSelectSession}
               onNewChat={onNewChat}
               onClose={onClose}
@@ -114,7 +110,6 @@ function SidebarContent({
   activeSection = "knowledge",
   sessions = [],
   activeSessionId = "",
-  knowledgeBases = [],
   userRole,
   onSelectSession,
   onNewChat,
@@ -141,7 +136,6 @@ function SidebarContent({
         <ChatNav
           sessions={sessions}
           activeSessionId={activeSessionId}
-          knowledgeBases={knowledgeBases}
           onSelectSession={onSelectSession}
           onNewChat={onNewChat}
           onClose={onClose}
@@ -201,23 +195,14 @@ function WorkspaceSwitch({ mode, onClose }: { mode: SidebarMode; onClose: () => 
 interface ChatNavProps {
   sessions: Session[];
   activeSessionId: string;
-  knowledgeBases: KnowledgeBase[];
   onSelectSession?: (id: string) => void;
   onNewChat?: () => void;
   onClose: () => void;
 }
 
-function ChatNav({
-  sessions,
-  activeSessionId,
-  knowledgeBases,
-  onSelectSession,
-  onNewChat,
-  onClose,
-}: ChatNavProps) {
+function ChatNav({ sessions, activeSessionId, onSelectSession, onNewChat, onClose }: ChatNavProps) {
   const [query, setQuery] = useState("");
   const searchId = useId();
-  const kbHeadingId = useId();
 
   const normalized = query.trim().toLowerCase();
   const filtered = normalized
@@ -321,33 +306,6 @@ function ChatNav({
           })
         )}
       </nav>
-
-      <section aria-labelledby={kbHeadingId} className="shrink-0 border-t border-border p-3">
-        <div className="flex items-center justify-between px-1">
-          <h2 id={kbHeadingId} className="text-[11px] font-medium tracking-wider text-subtle">
-            可用知识库
-          </h2>
-          <span className="text-[11px] tabular-nums text-subtle">{knowledgeBases.length}</span>
-        </div>
-        <ul className="mt-2 space-y-0.5">
-          {knowledgeBases.map((knowledgeBase) => (
-            <li
-              key={knowledgeBase.id}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted"
-            >
-              <Icon name="book-open" size={15} className="shrink-0 text-subtle" />
-              <span className="min-w-0 flex-1 truncate">{knowledgeBase.name}</span>
-              <span className="shrink-0 text-[11px] tabular-nums text-subtle">
-                {knowledgeBase.documentCount}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-2 flex items-start gap-1.5 px-2 text-[11px] leading-4 text-subtle">
-          <Icon name="lock" size={12} className="mt-0.5 shrink-0" />
-          仅显示已授权范围，权限变更后下一次提问生效
-        </p>
-      </section>
     </div>
   );
 }
@@ -478,14 +436,6 @@ function ManageNav({
           })}
         </ul>
       </nav>
-
-      <div className="mt-4 shrink-0 rounded-xl border border-border bg-surface-2/60 p-3 text-[11px] leading-5 text-subtle">
-        <p className="flex items-center gap-1.5 font-medium text-muted">
-          <Icon name="users" size={12} />
-          成员来源
-        </p>
-        <p className="mt-1">成员与部门来自本地数据库，当前只读；权限变更由服务端写入审计。</p>
-      </div>
     </div>
   );
 }

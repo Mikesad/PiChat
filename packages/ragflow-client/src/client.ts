@@ -420,6 +420,9 @@ export class RAGFlowClient {
       similarity: chunk.similarity ?? 0,
       vectorSimilarity: chunk.vector_similarity ?? 0,
       termSimilarity: chunk.term_similarity ?? 0,
+      ...(input.rerankId && typeof chunk.vector_similarity === "number"
+        ? { rerankScore: chunk.vector_similarity }
+        : {}),
     }));
   }
 }

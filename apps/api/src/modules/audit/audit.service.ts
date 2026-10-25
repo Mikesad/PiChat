@@ -8,7 +8,7 @@ import {
   defaultPageSize,
   type SessionUser,
 } from "@pichat/shared";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { forbidden } from "../../common/api-error";
 import { DATABASE } from "../../common/database.module";
 import { buildPaginationMeta, type PaginationInput, pageOffset } from "../../common/pagination";
@@ -127,7 +127,10 @@ export class AuditService {
     const [totalRows, rows] = await Promise.all([
       this.db.select({ total: count() }).from(auditLogs).where(where),
       this.db
-        .select()
+        .select({
+          ...getTableColumns(auditLogs),
+          createdAtUnix: sql<number>`unix_timestamp(${auditLogs.createdAt})`,
+        })
         .from(auditLogs)
         .where(where)
         .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
@@ -226,7 +229,7 @@ export class AuditService {
         result: resultFromMetadata(metadata),
         summary: buildSummary(row.action, resourceLabel, metadata),
         metadata,
-        createdAt: row.createdAt.toISOString(),
+        createdAt: new Date(Number(row.createdAtUnix) * 1000).toISOString(),
       };
     });
 

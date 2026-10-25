@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Database, User } from "@pichat/db";
-import { authSessions, users, verifyPassword } from "@pichat/db";
+import { authSessions, departments, users, verifyPassword } from "@pichat/db";
 import type { SessionUser } from "@pichat/shared";
 import { and, eq, gt } from "drizzle-orm";
 import { ApiException } from "../../common/api-error";
@@ -19,13 +19,18 @@ export class AuthService {
 
   async login(email: string, password: string): Promise<LoginResult> {
     const rows = await this.db
-      .select()
+      .select({ user: users, departmentName: departments.name })
       .from(users)
+      .leftJoin(
+        departments,
+        and(eq(departments.id, users.departmentId), eq(departments.tenantId, users.tenantId)),
+      )
       .where(eq(users.email, email.trim().toLowerCase()))
       .limit(1);
-    const user = rows[0];
+    const row = rows[0];
+    const user = row?.user;
 
-    if (!user) {
+    if (!row || !user) {
       throw new ApiException("user_not_found", "邮箱不存在", 401);
     }
     if (user.status !== "active") {
@@ -45,15 +50,23 @@ export class AuthService {
       lastUsedAt: new Date(),
     });
 
-    return { user: await this.toSessionUser(user), token };
+    return { user: this.toSessionUser(user, row.departmentName), token };
   }
 
   async resolveSession(token: string): Promise<SessionUser | null> {
     const now = new Date();
     const rows = await this.db
-      .select({ sessionId: authSessions.id, user: users })
+      .select({
+        sessionId: authSessions.id,
+        user: users,
+        departmentName: departments.name,
+      })
       .from(authSessions)
       .innerJoin(users, eq(authSessions.userId, users.id))
+      .leftJoin(
+        departments,
+        and(eq(departments.id, users.departmentId), eq(departments.tenantId, users.tenantId)),
+      )
       .where(
         and(
           eq(authSessions.tokenHash, hashSessionToken(token)),
@@ -73,14 +86,14 @@ export class AuthService {
       .set({ lastUsedAt: now })
       .where(eq(authSessions.id, row.sessionId));
 
-    return this.toSessionUser(row.user);
+    return this.toSessionUser(row.user, row.departmentName);
   }
 
   async logout(token: string): Promise<void> {
     await this.db.delete(authSessions).where(eq(authSessions.tokenHash, hashSessionToken(token)));
   }
 
-  private async toSessionUser(user: User): Promise<SessionUser> {
+  private toSessionUser(user: User, departmentName: string | null): SessionUser {
     return {
       id: user.id,
       tenantId: user.tenantId,
@@ -88,6 +101,7 @@ export class AuthService {
       displayName: user.displayName,
       role: user.role,
       departmentId: user.departmentId,
+      departmentName,
     };
   }
 }

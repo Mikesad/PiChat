@@ -45,16 +45,15 @@ export function Composer({
   const webSearchRef = useRef<HTMLButtonElement>(null);
   const modelMeasureRef = useRef<HTMLSpanElement>(null);
   const lastWheelAtRef = useRef(0);
-  const { chatConfigs, defaultConfigId, setDefaultConfig } = useModelConfig();
+  const { chatConfigs, activeConfig, selectConfig } = useModelConfig();
   const { showToast } = useToast();
   const [thinking, setThinking] = useState("medium");
   const [modelSelectWidth, setModelSelectWidth] = useState<number | null>(null);
   const modelId = useId();
   const thinkingId = useId();
 
-  const activeModelId = defaultConfigId ?? chatConfigs[0]?.id ?? "none";
-  const activeModelLabel =
-    chatConfigs.find((config) => config.id === activeModelId)?.displayName ?? "尚未配置模型";
+  const activeModelId = activeConfig?.id ?? "none";
+  const activeModelLabel = activeConfig?.displayName ?? "尚未配置模型";
 
   useLayoutEffect(() => {
     const span = modelMeasureRef.current;
@@ -176,16 +175,14 @@ export function Composer({
                   value={chatConfigs.length > 0 ? activeModelId : "none"}
                   onChange={(event) => {
                     if (event.target.value !== "none") {
-                      void setDefaultConfig(event.target.value).catch(() => {
-                        showToast("切换默认模型失败，请稍后重试", "danger");
-                      });
+                      selectConfig(event.target.value);
                     }
                   }}
                   disabled={chatConfigs.length === 0}
                   title={
                     activeModelLabel === "尚未配置模型"
-                      ? "在左下角账号菜单中配置模型"
-                      : activeModelLabel
+                      ? "请联系企业管理员配置共享模型"
+                      : `${activeModelLabel}（仅当前浏览器会话生效，不修改企业默认模型）`
                   }
                   style={modelSelectWidth !== null ? { width: `${modelSelectWidth}px` } : undefined}
                   className={cn(

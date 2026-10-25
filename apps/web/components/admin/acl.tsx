@@ -1,7 +1,6 @@
 "use client";
 
-import type { AccessCheckResponse } from "@pichat/shared";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   type AclException,
   type AclPermission,
@@ -12,9 +11,8 @@ import {
   roleLabels,
   subjectKey,
 } from "@/lib/admin-data";
-import { apiErrorMessage, checkDocumentAccess } from "@/lib/api-client";
+import { apiErrorMessage } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { useAdminData } from "./admin-data";
 import { useDirectory } from "./directory";
@@ -120,7 +118,6 @@ export function DocumentAclDrawer({
     status: directoryStatus,
     error: directoryError,
   } = useDirectory();
-  const { user } = useAuth();
   const { showToast } = useToast();
   const handleApiError = useApiErrorHandler();
   const found = findDocument(knowledgeBases, documentId);
@@ -135,32 +132,6 @@ export function DocumentAclDrawer({
   const [error, setError] = useState<string | null>(null);
   const [discardPrompt, setDiscardPrompt] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [accessCheck, setAccessCheck] = useState<{
-    status: "loading" | "ready" | "error";
-    result?: AccessCheckResponse;
-    error?: string;
-  }>({ status: "loading" });
-
-  useEffect(() => {
-    let active = true;
-    setAccessCheck({ status: "loading" });
-
-    checkDocumentAccess(documentId)
-      .then((result) => {
-        if (active) {
-          setAccessCheck({ status: "ready", result });
-        }
-      })
-      .catch((cause) => {
-        if (active) {
-          setAccessCheck({ status: "error", error: apiErrorMessage(cause) });
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [documentId]);
 
   if (!found) {
     return null;
@@ -199,7 +170,7 @@ export function DocumentAclDrawer({
       return;
     }
     if (subjectDeniedByDefault && permission === "read") {
-      setError("该主体已被知识库默认禁止，文档读取例外无法覆盖，请先在知识库访问范围中移除禁止");
+      setError("该主体已被知识库默认禁止，文档级读取权限无法覆盖，请先在知识库访问范围中移除禁止");
       return;
     }
     setExceptions((previous) => mergeException(previous, { ...pendingSubject, permission }));
@@ -239,7 +210,7 @@ export function DocumentAclDrawer({
               ? [
                   modeChanged ? "权限模式变更 1 项" : null,
                   diff.total > 0
-                    ? `例外新增 ${diff.added} 项、移除 ${diff.removed} 项、修改 ${diff.changed} 项`
+                    ? `文档级权限新增 ${diff.added} 项、移除 ${diff.removed} 项、修改 ${diff.changed} 项`
                     : null,
                 ]
                   .filter(Boolean)
@@ -280,7 +251,7 @@ export function DocumentAclDrawer({
           服务端有效人数：{document.effectiveReaderCount} 人可读
         </p>
         <p className="mt-1 text-xs leading-5 text-subtle">
-          {document.exceptions.length} 条已保存例外 · 草稿 {exceptions.length} 条
+          {document.exceptions.length} 条已保存文档级权限 · 草稿 {exceptions.length} 条
           {diff.total > 0 ? "（尚未保存，人数不会变化）" : ""}
         </p>
       </div>
@@ -300,7 +271,7 @@ export function DocumentAclDrawer({
           >
             <p className="text-sm font-medium text-fg">继承知识库权限</p>
             <p className="mt-1 text-[11px] leading-5 text-subtle">
-              先通过知识库所属部门的访问校验；文档例外可继续拒绝特定主体。
+              先通过知识库所属部门的访问校验；文档级权限可继续拒绝特定主体。
             </p>
           </button>
           <button
@@ -321,7 +292,7 @@ export function DocumentAclDrawer({
         </div>
         {restrictedWithoutRead ? (
           <div className="mt-2">
-            <InfoBanner tone="warning" icon="alert-circle" title="独立授权文档没有读取例外">
+            <InfoBanner tone="warning" icon="alert-circle" title="独立授权文档没有文档级读取权限">
               保存后除租户管理员外，任何人都无法读取该文档。请至少添加一个读取主体。
             </InfoBanner>
           </div>
@@ -349,12 +320,12 @@ export function DocumentAclDrawer({
         </div>
         <p className="mt-1 text-[11px] text-subtle">
           {mode === "restricted"
-            ? "独立授权模式下，知识库允许只作为访问前提；还需在文档例外中显式授予读取。"
+            ? "独立授权模式下，知识库允许只作为访问前提；还需在文档级权限中显式授予读取。"
             : "继承模式下，知识库允许即代表可读；知识库禁止仍然优先。"}
         </p>
         {knowledgeBase.defaultSubjects.length === 0 && knowledgeBase.deniedSubjects.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-warning/40 bg-warning-soft px-3 py-2 text-xs leading-5 text-warning">
-            该知识库没有默认访问范围，普通成员只有在文档例外中才会获得读取权限。
+            该知识库没有默认访问范围，普通成员只有在文档级权限中才会获得读取权限。
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
@@ -402,14 +373,14 @@ export function DocumentAclDrawer({
 
       <section className="mt-5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-medium text-fg">文档例外</h3>
+          <h3 className="text-xs font-medium text-fg">文档级权限</h3>
           <Badge tone={draftDenyCount > 0 ? "danger" : "outline"}>{exceptions.length} 条</Badge>
         </div>
         {exceptions.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-subtle">
             {mode === "restricted"
-              ? "暂无文档例外。独立授权文档只有租户管理员可以读取。"
-              : "暂无文档例外。文档当前只继承知识库访问范围。"}
+              ? "暂无文档级权限。独立授权文档只有租户管理员可以读取。"
+              : "暂无文档级权限。文档当前只继承知识库访问范围。"}
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
@@ -464,7 +435,7 @@ export function DocumentAclDrawer({
                     onClick={() =>
                       setExceptions((previous) => removeException(previous, exception))
                     }
-                    aria-label={`移除 ${subjectName(exception)} 的文档例外`}
+                    aria-label={`移除 ${subjectName(exception)} 的文档级权限`}
                     className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-2 hover:text-danger"
                   >
                     <Icon name="trash" size={14} />
@@ -476,7 +447,7 @@ export function DocumentAclDrawer({
         )}
 
         <div className="mt-3 rounded-xl border border-border bg-surface-2/50 p-3">
-          <p className="text-xs font-medium text-fg">添加文档例外</p>
+          <p className="text-xs font-medium text-fg">添加文档级权限</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
             <SubjectSelect
               value={subjectValue}
@@ -495,12 +466,12 @@ export function DocumentAclDrawer({
           {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
           {pendingSubject && subjectInDefault && permission === "read" ? (
             <p className="mt-1 text-[11px] leading-5 text-warning">
-              该主体已通过知识库默认获得读取权限，这条例外不会扩大范围。
+              该主体已通过知识库默认获得读取权限，这条文档级权限规则不会扩大范围。
             </p>
           ) : null}
           {pendingSubject && subjectDeniedByDefault ? (
             <p className="mt-1 text-[11px] leading-5 text-danger">
-              该主体已被知识库默认禁止；文档读取例外无法覆盖，拒绝例外只会重复生效。
+              该主体已被知识库默认禁止；文档级读取权限无法覆盖，拒绝规则只会重复生效。
             </p>
           ) : null}
           {pendingSubject && subjectMemberCount(pendingSubject) === 0 && permission === "deny" ? (
@@ -509,77 +480,11 @@ export function DocumentAclDrawer({
             </p>
           ) : null}
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            拒绝优先于读取；同一主体只能保留一条文档例外。
+            拒绝优先于读取；同一主体只能保留一条文档级权限规则。
           </p>
         </div>
       </section>
-
-      <section className="mt-5">
-        <h3 className="text-xs font-medium text-fg">访问检查</h3>
-        <p className="mt-1 text-[11px] leading-5 text-subtle">
-          服务端只判定当前登录用户，基于已保存的权限。前端不能指定其他用户，也不能伪造服务端结果。
-        </p>
-        <div className="mt-2" role="status" aria-live="polite">
-          {accessCheck.status === "loading" ? (
-            <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-subtle">
-              正在请求服务端判定…
-            </p>
-          ) : null}
-          {accessCheck.status === "error" ? (
-            <InfoBanner tone="danger" icon="alert-circle" title="访问检查失败">
-              {accessCheck.error ?? "请稍后重试。"}
-            </InfoBanner>
-          ) : null}
-          {accessCheck.status === "ready" && accessCheck.result ? (
-            <AccessCheckResult
-              result={accessCheck.result}
-              userName={user?.displayName ?? "当前用户"}
-            />
-          ) : null}
-          {diff.total > 0 ? (
-            <p className="mt-1 text-[11px] leading-5 text-warning">
-              草稿尚未保存，以上服务端判定不包含本次更改。
-            </p>
-          ) : null}
-        </div>
-      </section>
     </Drawer>
-  );
-}
-
-function AccessCheckResult({
-  result,
-  userName,
-}: {
-  result: AccessCheckResponse;
-  userName: string;
-}) {
-  if (result.reason === "role_override") {
-    return (
-      <InfoBanner tone="accent" icon="shield-check" title="允许 · 角色覆盖">
-        {userName} 的角色始终可读该文档。服务端有效读者 {result.effectiveReaderCount} 人。
-      </InfoBanner>
-    );
-  }
-  if (result.reason === "explicit_deny") {
-    return (
-      <InfoBanner tone="danger" icon="ban" title="拒绝 · 命中拒绝规则">
-        拒绝优先于知识库默认和读取例外。服务端有效读者 {result.effectiveReaderCount} 人。
-      </InfoBanner>
-    );
-  }
-  if (result.reason === "allowed") {
-    return (
-      <InfoBanner tone="accent" icon="check-circle" title="允许">
-        来源为知识库默认范围或文档读取例外。服务端有效读者 {result.effectiveReaderCount} 人。
-      </InfoBanner>
-    );
-  }
-  return (
-    <InfoBanner tone="neutral" icon="lock" title="拒绝 · 无授权">
-      {userName} 不属于任何允许主体，因此无法读取该文档。服务端有效读者{" "}
-      {result.effectiveReaderCount} 人。
-    </InfoBanner>
   );
 }
 
@@ -661,11 +566,11 @@ export function BulkAclDrawer({
       onClose={onClose}
       width="lg"
       title="批量设置文档权限"
-      description={`将整体替换选中的 ${documentIds.length} 篇文档的例外规则`}
+      description={`将整体替换选中的 ${documentIds.length} 篇文档的文档级权限规则`}
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-subtle">
-            {exceptions.length} 条例外 · {denyCount} 条拒绝
+            {exceptions.length} 条文档级权限 · {denyCount} 条拒绝
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={onClose} disabled={saving}>
@@ -697,27 +602,27 @@ export function BulkAclDrawer({
       {existingExceptionCount > 0 ? (
         <div className="mt-3">
           <InfoBanner tone="warning" icon="alert-circle" title="整体替换，不是追加">
-            这些文档当前共有 {existingExceptionCount} 条例外
+            这些文档当前共有 {existingExceptionCount} 条文档级权限
             {hasSharedExceptions ? "（规则相同，已载入草稿）" : "（规则不一致，草稿从空开始）"}。
             保存后每篇文档只保留下方草稿中的规则；知识库默认访问范围不受影响。
           </InfoBanner>
         </div>
       ) : (
         <div className="mt-3">
-          <InfoBanner tone="neutral" icon="info" title="批量例外">
-            选中的文档当前没有文档例外。保存后将为每篇文档写入相同的例外规则。
+          <InfoBanner tone="neutral" icon="info" title="批量文档级权限">
+            选中的文档当前没有文档级权限。保存后将为每篇文档写入相同的文档级权限规则。
           </InfoBanner>
         </div>
       )}
 
       <section className="mt-5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-medium text-fg">批量例外草稿</h3>
+          <h3 className="text-xs font-medium text-fg">批量文档级权限草稿</h3>
           <Badge tone={denyCount > 0 ? "danger" : "outline"}>{exceptions.length} 条</Badge>
         </div>
         {exceptions.length === 0 ? (
           <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-subtle">
-            草稿为空。保存会清空这些文档的全部文档例外，仅保留知识库默认范围。
+            草稿为空。保存会清空这些文档的全部文档级权限，仅保留知识库默认范围。
           </p>
         ) : (
           <ul className="mt-2 space-y-1.5">
@@ -751,7 +656,7 @@ export function BulkAclDrawer({
                 <button
                   type="button"
                   onClick={() => setExceptions((previous) => removeException(previous, exception))}
-                  aria-label={`移除 ${subjectName(exception)} 的批量例外`}
+                  aria-label={`移除 ${subjectName(exception)} 的批量文档级权限`}
                   className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-2 hover:text-danger"
                 >
                   <Icon name="trash" size={14} />
@@ -762,7 +667,7 @@ export function BulkAclDrawer({
         )}
 
         <div className="mt-3 rounded-xl border border-border bg-surface-2/50 p-3">
-          <p className="text-xs font-medium text-fg">添加例外</p>
+          <p className="text-xs font-medium text-fg">添加文档级权限</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px_auto]">
             <SubjectSelect
               value={subjectValue}
@@ -780,7 +685,7 @@ export function BulkAclDrawer({
           </div>
           {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            同一主体只能保留一条例外；拒绝优先于读取，保存后下一次提问立即生效。
+            同一主体只能保留一条文档级权限规则；拒绝优先于读取，保存后下一次提问立即生效。
           </p>
         </div>
       </section>

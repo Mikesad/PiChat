@@ -7,6 +7,7 @@ import type {
 } from "@pichat/shared";
 import { searchEngineProviderOptions, searchEngineProviders } from "@pichat/shared";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { canManageSharedConfigs } from "@/lib/admin-data";
 import {
   apiErrorMessage,
   createSearchConfig,
@@ -17,6 +18,7 @@ import {
   updateSearchConfig,
 } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
 import { ConfirmDialog } from "./confirm-dialog";
 import { Drawer } from "./drawer";
@@ -33,7 +35,9 @@ import {
 } from "./ui";
 
 export function SearchSettings() {
+  const { user } = useAuth();
   const { showToast } = useToast();
+  const canManage = canManageSharedConfigs(user?.role);
   const [configs, setConfigs] = useState<SearchConfigSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +64,9 @@ export function SearchSettings() {
   }, [reload]);
 
   async function handleSetDefault(config: SearchConfigSummary) {
+    if (!canManage) {
+      return;
+    }
     setActionError(null);
     try {
       const response = await setDefaultSearchConfig(config.id);
@@ -78,6 +85,9 @@ export function SearchSettings() {
   }
 
   async function handleRemove(config: SearchConfigSummary) {
+    if (!canManage) {
+      return;
+    }
     setActionError(null);
     try {
       await deleteSearchConfig(config.id);
@@ -89,27 +99,35 @@ export function SearchSettings() {
     }
   }
 
-  const drawerOpen = creating || editing !== null;
+  const drawerOpen = canManage && (creating || editing !== null);
 
   return (
     <div className="space-y-5">
       <PageHeader
         eyebrow="联网能力"
         title="搜索引擎"
-        description="按账号配置联网搜索使用的引擎。当前支持 Tavily；API Key 由服务端加密保存，只在单次聊天运行中传给 Agent Runtime。"
+        description="企业内共用联网搜索使用的引擎：管理员配置一次，所有成员开启联网后直接使用。当前支持 Tavily；API Key 由服务端加密保存，只在单次聊天运行中传给 Agent Runtime。"
         actions={
-          <Button
-            onClick={() => {
-              setActionError(null);
-              setEditing(null);
-              setCreating(true);
-            }}
-          >
-            <Icon name="plus" size={15} />
-            添加搜索引擎
-          </Button>
+          canManage ? (
+            <Button
+              onClick={() => {
+                setActionError(null);
+                setEditing(null);
+                setCreating(true);
+              }}
+            >
+              <Icon name="plus" size={15} />
+              添加搜索引擎
+            </Button>
+          ) : null
         }
       />
+
+      {!canManage ? (
+        <InfoBanner tone="neutral" icon="lock" title="只读模式">
+          共享搜索引擎由企业管理员统一维护。开启联网搜索后会自动使用默认配置。
+        </InfoBanner>
+      ) : null}
 
       {error ? (
         <InfoBanner tone="danger" icon="alert-circle" title="搜索引擎加载失败">
@@ -133,16 +151,18 @@ export function SearchSettings() {
             title="还没有配置搜索引擎"
             description="添加 Tavily 配置后，对话中的联网搜索会使用该 API Key；未配置时回退到服务端环境变量。"
             action={
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setEditing(null);
-                  setCreating(true);
-                }}
-              >
-                <Icon name="plus" size={14} />
-                添加搜索引擎
-              </Button>
+              canManage ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setEditing(null);
+                    setCreating(true);
+                  }}
+                >
+                  <Icon name="plus" size={14} />
+                  添加搜索引擎
+                </Button>
+              ) : null
             }
           />
         </div>
@@ -174,49 +194,56 @@ export function SearchSettings() {
                     <p>{config.apiKeyMasked || "未保存密钥"}</p>
                     <p className="truncate">{config.proxy || "直连，未配置代理"}</p>
                   </div>
+                  <p className="mt-1 truncate text-[10px] text-subtle">
+                    {config.createdByName ? `由 ${config.createdByName} 配置` : "创建人已删除"}
+                  </p>
                 </div>
               </div>
 
-              <div className="mt-auto flex flex-wrap items-center gap-1 pt-3">
-                {!config.isDefault ? (
-                  <Button size="sm" variant="ghost" onClick={() => void handleSetDefault(config)}>
-                    设为默认
+              {canManage ? (
+                <div className="mt-auto flex flex-wrap items-center gap-1 pt-3">
+                  {!config.isDefault ? (
+                    <Button size="sm" variant="ghost" onClick={() => void handleSetDefault(config)}>
+                      设为默认
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setActionError(null);
+                      setCreating(false);
+                      setEditing(config);
+                    }}
+                  >
+                    编辑
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setActionError(null);
-                    setCreating(false);
-                    setEditing(config);
-                  }}
-                >
-                  编辑
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => setRemoving(config)}
-                  className="inline-flex h-9 cursor-pointer items-center rounded-lg px-2.5 text-xs font-medium text-danger transition-colors duration-150 hover:bg-danger-soft"
-                >
-                  移除
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setRemoving(config)}
+                    className="inline-flex h-9 cursor-pointer items-center rounded-lg px-2.5 text-xs font-medium text-danger transition-colors duration-150 hover:bg-danger-soft"
+                  >
+                    移除
+                  </button>
+                </div>
+              ) : null}
             </article>
           ))}
-          <button
-            type="button"
-            onClick={() => {
-              setEditing(null);
-              setCreating(true);
-            }}
-            className="flex min-h-[152px] cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/60 text-subtle transition-colors duration-150 hover:border-accent hover:bg-accent-soft/40 hover:text-fg"
-          >
-            <span className="flex size-9 items-center justify-center rounded-full bg-surface-2">
-              <Icon name="plus" size={17} />
-            </span>
-            <span className="text-xs font-medium">添加搜索引擎</span>
-          </button>
+          {canManage ? (
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(null);
+                setCreating(true);
+              }}
+              className="flex min-h-[152px] cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface/60 text-subtle transition-colors duration-150 hover:border-accent hover:bg-accent-soft/40 hover:text-fg"
+            >
+              <span className="flex size-9 items-center justify-center rounded-full bg-surface-2">
+                <Icon name="plus" size={17} />
+              </span>
+              <span className="text-xs font-medium">添加搜索引擎</span>
+            </button>
+          ) : null}
         </div>
       )}
 

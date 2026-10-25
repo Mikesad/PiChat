@@ -85,6 +85,10 @@ export function canViewAudit(role: UserRole | undefined): boolean {
   return role === "tenant_admin" || role === "security_admin";
 }
 
+export function canManageSharedConfigs(role: UserRole | undefined): boolean {
+  return role === "tenant_admin";
+}
+
 export const mockCurrentUser: AdminUser = {
   id: "u-zhang",
   name: "张明",
@@ -203,7 +207,7 @@ export const users: AdminUser[] = [
 ];
 
 export const groups: AdminGroup[] = [
-  { id: "g-all", name: "全员", externalId: "idp-all-staff" },
+  { id: "g-all", name: "综合部", externalId: "idp-all-staff" },
   { id: "g-platform", name: "平台部", externalId: "idp-platform" },
   { id: "g-product", name: "产品部", externalId: "idp-product" },
   { id: "g-support", name: "售后部", externalId: "idp-support" },
@@ -287,7 +291,7 @@ export const seedKnowledgeBases: AdminKnowledgeBase[] = [
   {
     id: "kb-policy",
     name: "内部制度",
-    description: "公司级制度、流程与合规文件，默认全员可读。",
+    description: "公司级制度、流程与合规文件，默认多部门可读。",
     embeddingModel: "bge-m3 · 1024 维",
     ownerDepartmentId: "g-platform",
     ragflowDatasetId: "ragflow_policy_2026",
@@ -856,11 +860,18 @@ export type AuditAction =
   | "document.delete"
   | "document.reparse"
   | "document.acl.update"
+  | "document.acl_mode.update"
   | "document.acl.batch_update"
   | "member.update"
   | "member.password_reset";
 
 export type AuditResult = "success" | "denied" | "failed";
+
+export interface AuditMetadataItem {
+  key?: string;
+  label: string;
+  value: unknown;
+}
 
 export interface AuditLogEntry {
   id: string;
@@ -874,7 +885,7 @@ export interface AuditLogEntry {
   resourceLabel: string;
   result: AuditResult;
   summary: string;
-  metadata: Array<{ label: string; value: string }>;
+  metadata: AuditMetadataItem[];
 }
 
 export const auditActionLabels: Record<AuditAction, string> = {
@@ -887,6 +898,7 @@ export const auditActionLabels: Record<AuditAction, string> = {
   "document.delete": "删除文档",
   "document.reparse": "重新解析文档",
   "document.acl.update": "更新文档权限",
+  "document.acl_mode.update": "更新文档权限模式",
   "document.acl.batch_update": "批量更新文档权限",
   "member.update": "更新成员",
   "member.password_reset": "重置成员密码",
@@ -950,9 +962,9 @@ export const seedAuditLogs: AuditLogEntry[] = [
     resourceId: "kb-policy",
     resourceLabel: "内部制度",
     result: "success",
-    summary: "更新默认访问范围：全员",
+    summary: "更新默认访问范围：综合部",
     metadata: [
-      { label: "默认范围", value: "全员" },
+      { label: "默认范围", value: "综合部" },
       { label: "生效范围", value: "下一次提问" },
     ],
   },

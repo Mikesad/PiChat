@@ -5,14 +5,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AuditAction,
   type AuditLogEntry,
+  type AuditMetadataItem,
   type AuditResult,
   auditActionLabels,
   auditResourceLabels,
   auditResultLabels,
+  roleLabels,
 } from "@/lib/admin-data";
 import { ApiError, apiErrorMessage, fetchAuditLogs } from "@/lib/api-client";
 import { useAuth } from "../auth/auth-provider";
 import { Icon } from "../icons";
+import { useDirectory } from "./directory";
 import { Drawer } from "./drawer";
 import { Pagination } from "./pagination";
 import {
@@ -31,17 +34,123 @@ import {
 
 const metadataLabels: Record<string, string> = {
   name: "名称",
+  description: "描述",
+  title: "标题",
   changes: "变更字段",
   before: "变更前",
   after: "变更后",
   retrieval: "检索参数",
   aclVersion: "ACL 版本",
   documentIds: "文档",
+  knowledgeBaseId: "知识库",
   ragflowDatasetId: "数据集",
+  ragflowDocumentId: "RAGFlow 文档",
   embeddingModel: "Embedding",
+  ownerId: "创建者",
+  ownerDepartmentId: "归属部门",
   localCleanup: "本地清理",
   remoteCleanup: "RAGFlow 清理",
+  aclMode: "权限模式",
+  role: "角色",
+  status: "状态",
+  departmentId: "部门",
+  topK: "Top K",
+  similarityThreshold: "相似度阈值",
+  vectorWeight: "向量权重",
+  documentsWithExceptions: "设置过文档级权限的文档",
+  totalExceptions: "文档级权限总数",
+  exceptionsPerDocument: "每篇文档权限数",
+  retrievalTopK: "检索 Top K",
+  retrievalSimilarityThreshold: "检索相似度阈值",
+  retrievalVectorWeight: "检索向量权重",
 };
+
+const valueLabels: Record<string, Record<string, string>> = {
+  role: { ...roleLabels },
+  status: { active: "启用", disabled: "停用" },
+  aclMode: { inherit: "继承知识库权限", restricted: "仅限独立授权" },
+  permission: { read: "允许", deny: "禁止" },
+  type: { user: "用户", group: "部门" },
+  localCleanup: { pending: "待清理", done: "已清理", failed: "失败" },
+  remoteCleanup: { pending: "待清理", done: "已清理", failed: "失败" },
+};
+
+interface AclAuditEntry {
+  type: "user" | "group";
+  id: string;
+  permission: "read" | "deny";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAclAuditEntry(value: unknown): value is AclAuditEntry {
+  return (
+    isRecord(value) &&
+    (value.type === "user" || value.type === "group") &&
+    typeof value.id === "string" &&
+    (value.permission === "read" || value.permission === "deny")
+  );
+}
+
+function asAclEntries(value: unknown, key?: string): AclAuditEntry[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  if (value.length === 0) {
+    return key === "before" || key === "after" ? [] : null;
+  }
+  return value.every(isAclAuditEntry) ? value : null;
+}
+
+function formatScalar(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function resolveSubjectName(
+  subjectName: (subject: { type: "user" | "group"; id: string }) => string,
+  type: "user" | "group",
+  id: string,
+): string {
+  const name = subjectName({ type, id });
+  return name === "未知用户" || name === "未知部门" ? id : name;
+}
+
+function formatValue(
+  key: string,
+  value: unknown,
+  subjectName: (subject: { type: "user" | "group"; id: string }) => string,
+): string {
+  if (typeof value === "string") {
+    if (key === "departmentId" || key === "ownerDepartmentId") {
+      return value ? resolveSubjectName(subjectName, "group", value) : "未分配";
+    }
+    if (key === "ownerId") {
+      return resolveSubjectName(subjectName, "user", value);
+    }
+    return valueLabels[key]?.[value] ?? value;
+  }
+  if (Array.isArray(value)) {
+    if (key === "documentIds") {
+      return `${value.length} 篇`;
+    }
+    if (key === "changes") {
+      return value.map((item) => metadataLabels[String(item)] ?? String(item)).join("、");
+    }
+    return value.map(formatScalar).join("、");
+  }
+  return formatScalar(value);
+}
 
 function formatAuditTime(value: string): string {
   const date = new Date(value);
@@ -54,16 +163,6 @@ function formatAuditTime(value: string): string {
     return `今天 ${time}`;
   }
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
-}
-
-function formatMetadataValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "—";
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
 }
 
 function toAuditEntry(log: AuditLogSummary): AuditLogEntry {
@@ -81,10 +180,7 @@ function toAuditEntry(log: AuditLogSummary): AuditLogEntry {
     summary: log.summary,
     metadata: Object.entries(log.metadata ?? {})
       .filter(([key]) => key !== "actorId" && key !== "result")
-      .map(([key, value]) => ({
-        label: metadataLabels[key] ?? key,
-        value: formatMetadataValue(value),
-      })),
+      .map(([key, value]) => ({ key, label: metadataLabels[key] ?? key, value })),
   };
 }
 
@@ -441,7 +537,143 @@ function AuditCard({ log, onOpen }: { log: AuditLogEntry; onOpen: () => void }) 
   );
 }
 
+function AclEntries({
+  entries,
+  subjectName,
+  emptyLabel,
+}: {
+  entries: AclAuditEntry[];
+  subjectName: (subject: { type: "user" | "group"; id: string }) => string;
+  emptyLabel: string;
+}) {
+  if (entries.length === 0) {
+    return <p className="text-xs leading-5 text-subtle">{emptyLabel}</p>;
+  }
+
+  return (
+    <ul className="space-y-1.5">
+      {entries.map((entry) => (
+        <li
+          key={`${entry.type}:${entry.id}:${entry.permission}`}
+          className="flex items-start justify-between gap-2"
+        >
+          <span className="min-w-0 break-all text-xs leading-5 text-fg">
+            <span className="text-subtle">{entry.type === "group" ? "部门 · " : "用户 · "}</span>
+            {resolveSubjectName(subjectName, entry.type, entry.id)}
+          </span>
+          <Badge tone={entry.permission === "deny" ? "danger" : "success"}>
+            {entry.permission === "deny" ? "禁止" : "允许"}
+          </Badge>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MetadataValue({ item, emptyLabel }: { item: AuditMetadataItem; emptyLabel: string }) {
+  const { subjectName } = useDirectory();
+  const aclEntries = asAclEntries(item.value, item.key);
+
+  if (aclEntries) {
+    return <AclEntries entries={aclEntries} subjectName={subjectName} emptyLabel={emptyLabel} />;
+  }
+
+  if (isRecord(item.value)) {
+    const entries = Object.entries(item.value);
+    if (entries.length === 0) {
+      return <span className="text-xs text-subtle">—</span>;
+    }
+    return (
+      <dl className="space-y-1.5">
+        {entries.map(([key, value]) => (
+          <div key={key} className="flex items-baseline justify-between gap-3">
+            <dt className="shrink-0 text-[11px] text-subtle">{metadataLabels[key] ?? key}</dt>
+            <dd className="min-w-0 break-words text-right text-xs leading-5 text-fg">
+              {formatValue(key, value, subjectName)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+
+  return (
+    <span className="break-words text-xs leading-5 text-fg">
+      {formatValue(item.key ?? "", item.value, subjectName)}
+    </span>
+  );
+}
+
+function MetadataRow({ item, emptyLabel }: { item: AuditMetadataItem; emptyLabel: string }) {
+  if (isRecord(item.value)) {
+    return (
+      <div className="px-3 py-2.5">
+        <dt className="text-[11px] text-subtle">{item.label}</dt>
+        <dd className="mt-1.5">
+          <MetadataValue item={item} emptyLabel={emptyLabel} />
+        </dd>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start justify-between gap-3 px-3 py-2">
+      <dt className="shrink-0 text-[11px] text-subtle">{item.label}</dt>
+      <dd className="min-w-0 max-w-[280px] text-right">
+        <MetadataValue item={item} emptyLabel={emptyLabel} />
+      </dd>
+    </div>
+  );
+}
+
+function ChangeComparison({
+  before,
+  after,
+  emptyLabel,
+}: {
+  before?: AuditMetadataItem;
+  after?: AuditMetadataItem;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      <div className="rounded-xl border border-border bg-surface-2/50 p-3">
+        <p className="text-[11px] font-medium text-subtle">变更前</p>
+        <div className="mt-2">
+          {before ? (
+            <MetadataValue item={before} emptyLabel={emptyLabel} />
+          ) : (
+            <span className="text-xs text-subtle">—</span>
+          )}
+        </div>
+      </div>
+      <div className="rounded-xl border border-accent/30 bg-accent-soft/30 p-3">
+        <p className="text-[11px] font-medium text-accent">变更后</p>
+        <div className="mt-2">
+          {after ? (
+            <MetadataValue item={after} emptyLabel={emptyLabel} />
+          ) : (
+            <span className="text-xs text-subtle">—</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void }) {
+  const before = log.metadata.find((item) => item.key === "before");
+  const after = log.metadata.find((item) => item.key === "after");
+  const otherMetadata = log.metadata.filter(
+    (item) => item.key !== "before" && item.key !== "after",
+  );
+  const emptyLabel =
+    log.action === "document.acl.update"
+      ? "无（未设置文档级权限）"
+      : log.action === "knowledge_base.acl.update"
+        ? "无（未设置访问范围）"
+        : "无";
+
   return (
     <Drawer
       open
@@ -494,16 +726,18 @@ function AuditDrawer({ log, onClose }: { log: AuditLogEntry; onClose: () => void
       </section>
 
       {log.metadata.length > 0 ? (
-        <section className="mt-4">
+        <section className="mt-4 space-y-2">
           <h3 className="text-xs font-medium text-fg">详情</h3>
-          <dl className="mt-2 divide-y divide-border rounded-xl border border-border bg-surface">
-            {log.metadata.map((item) => (
-              <div key={item.label} className="flex items-start justify-between gap-3 px-3 py-2">
-                <dt className="text-[11px] text-subtle">{item.label}</dt>
-                <dd className="max-w-[280px] text-right text-xs text-fg">{item.value}</dd>
-              </div>
-            ))}
-          </dl>
+          {before || after ? (
+            <ChangeComparison before={before} after={after} emptyLabel={emptyLabel} />
+          ) : null}
+          {otherMetadata.length > 0 ? (
+            <dl className="divide-y divide-border rounded-xl border border-border bg-surface">
+              {otherMetadata.map((item) => (
+                <MetadataRow key={item.key ?? item.label} item={item} emptyLabel={emptyLabel} />
+              ))}
+            </dl>
+          ) : null}
         </section>
       ) : null}
 

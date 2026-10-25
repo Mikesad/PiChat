@@ -18,12 +18,22 @@ const seedAccounts = [
   {
     name: "张明",
     role: "租户管理员",
-    email: "zhang.ming@example.com",
+    email: "zhangming@qq.com",
+  },
+  {
+    name: "陈晨",
+    role: "产品部成员",
+    email: "chenchen@qq.com",
+  },
+  {
+    name: "赵敏",
+    role: "财务部成员",
+    email: "zhaomin@qq.com",
   },
   {
     name: "王芳",
-    role: "成员",
-    email: "wang.fang@example.com",
+    role: "综合部成员",
+    email: "wangfang@qq.com",
   },
 ];
 
@@ -70,7 +80,7 @@ function loginErrorFor(error: unknown): LoginErrors {
 export function LoginForm() {
   const router = useRouter();
   const { login } = useAuth();
-  const [email, setEmail] = useState("zhang.ming@example.com");
+  const [email, setEmail] = useState("zhangming@qq.com");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<LoginErrors>({});

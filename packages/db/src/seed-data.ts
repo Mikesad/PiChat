@@ -180,7 +180,7 @@ export const seedUsers: SeedUser[] = [
 ];
 
 export const seedGroups: SeedGroup[] = [
-  { id: "g-all", name: "全员", externalId: "idp-all-staff" },
+  { id: "g-all", name: "综合部", externalId: "idp-all-staff" },
   { id: "g-platform", name: "平台部", externalId: "idp-platform" },
   { id: "g-product", name: "产品部", externalId: "idp-product" },
   { id: "g-support", name: "售后部", externalId: "idp-support" },
@@ -192,7 +192,7 @@ export const seedKnowledgeBases: SeedKnowledgeBase[] = [
   {
     id: "kb-policy",
     name: "内部制度",
-    description: "公司级制度、流程与合规文件，默认全员可读。",
+    description: "公司级制度、流程与合规文件，默认多部门可读。",
     embeddingModel: "bge-m3 · 1024 维",
     ownerId: "u-zhang",
     ownerDepartmentId: "g-platform",

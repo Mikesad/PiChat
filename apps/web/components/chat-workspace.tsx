@@ -488,7 +488,7 @@ export function ChatWorkspace() {
         return;
       }
       if (modelsReady && !activeConfig) {
-        showToast("请先在左下角账号菜单中配置模型。", "danger");
+        showToast("尚未配置可用模型，请联系企业管理员。", "danger");
         return;
       }
 
@@ -560,6 +560,7 @@ export function ChatWorkspace() {
           targetSessionId,
           {
             content: text,
+            modelConfigId: activeConfig?.id,
             thinkingLevel,
             retry,
             webSearch: webSearchEnabled,
@@ -696,7 +697,6 @@ export function ChatWorkspace() {
         mode="chat"
         sessions={sessions}
         activeSessionId={activeSessionId ?? ""}
-        knowledgeBases={knowledgeBases}
         mobileOpen={sidebarOpen}
         onSelectSession={handleSelectSession}
         onNewChat={handleNewChat}

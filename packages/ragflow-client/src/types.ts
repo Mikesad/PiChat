@@ -22,6 +22,7 @@ export interface RetrievalChunk {
   similarity: number;
   vectorSimilarity: number;
   termSimilarity: number;
+  rerankScore?: number;
 }
 
 export interface RAGFlowEnvelope<T> {

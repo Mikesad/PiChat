@@ -4,12 +4,11 @@ import { defaultPageSize, type PaginationMeta } from "@pichat/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { defaultAccessLabel, documentStats } from "@/lib/admin-data";
+import { documentStats } from "@/lib/admin-data";
 import { useAuth } from "../auth/auth-provider";
 import { Icon, Spinner } from "../icons";
 import { useAdminData } from "./admin-data";
 import { CreateKnowledgeDrawer } from "./create-knowledge-drawer";
-import { useDirectory } from "./directory";
 import { Pagination } from "./pagination";
 import {
   Badge,
@@ -29,7 +28,6 @@ import {
 
 export function KnowledgeListPage() {
   const { knowledgeBases, status, error, reload } = useAdminData();
-  const { subjectName } = useDirectory();
   const { user } = useAuth();
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -229,7 +227,7 @@ export function KnowledgeListPage() {
                   <th className={thClass}>知识库</th>
                   <th className={thClass}>文档</th>
                   <th className={thClass}>默认访问</th>
-                  <th className={thClass}>文档例外</th>
+                  <th className={thClass}>文档级权限</th>
                   <th className={thClass}>最近变更</th>
                   <th className={thClass}>
                     <span className="sr-only">操作</span>
@@ -263,15 +261,8 @@ export function KnowledgeListPage() {
                         </Link>
                       </td>
                       <td className={tdClass}>
-                        <p className="text-sm font-medium tabular-nums text-fg">{stats.total} 篇</p>
-                        <p className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-subtle">
-                          <span className="text-success">{stats.ready} 可检索</span>
-                          {stats.parsing > 0 ? (
-                            <span className="text-warning">{stats.parsing} 解析中</span>
-                          ) : null}
-                          {stats.failed > 0 ? (
-                            <span className="text-danger">{stats.failed} 失败</span>
-                          ) : null}
+                        <p className="text-sm font-medium tabular-nums text-fg">
+                          {stats.total} 篇文档
                         </p>
                         <p className="mt-0.5 text-[11px] text-subtle">
                           当前可读 {knowledgeBase.readableDocumentCount} 篇
@@ -294,16 +285,8 @@ export function KnowledgeListPage() {
                                 +{knowledgeBase.defaultSubjects.length - 2}
                               </span>
                             ) : null}
-                            {knowledgeBase.deniedSubjects.length > 0 ? (
-                              <Badge tone="danger">
-                                禁止 {knowledgeBase.deniedSubjects.length}
-                              </Badge>
-                            ) : null}
                           </div>
                         )}
-                        <p className="mt-1 max-w-[180px] truncate text-[11px] text-subtle">
-                          {defaultAccessLabel(knowledgeBase, subjectName)}
-                        </p>
                       </td>
                       <td className={tdClass}>
                         <p className="text-sm tabular-nums text-fg">{stats.withExceptions} 篇</p>
@@ -313,9 +296,6 @@ export function KnowledgeListPage() {
                       </td>
                       <td className={tdClass}>
                         <p className="text-xs text-muted">{knowledgeBase.updatedLabel}</p>
-                        <p className="mt-0.5 text-[11px] text-subtle">
-                          {knowledgeBase.embeddingModel}
-                        </p>
                       </td>
                       <td className={`${tdClass} text-right`}>
                         <Link
@@ -357,28 +337,19 @@ export function KnowledgeListPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
                       <span>{stats.total} 篇文档</span>
-                      <span className="text-success">{stats.ready} 可检索</span>
-                      {stats.parsing > 0 ? (
-                        <span className="text-warning">{stats.parsing} 解析中</span>
-                      ) : null}
-                      {stats.failed > 0 ? (
-                        <span className="text-danger">{stats.failed} 失败</span>
-                      ) : null}
-                      <span>{stats.withExceptions} 篇有例外</span>
+                      <span>当前可读 {knowledgeBase.readableDocumentCount} 篇</span>
+                      <span>{stats.withExceptions} 篇有文档级权限</span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1">
                       {knowledgeBase.defaultSubjects.length === 0 &&
                       knowledgeBase.deniedSubjects.length === 0 ? (
                         <Badge tone="warning">未设置默认访问</Badge>
                       ) : (
-                        <>
-                          {knowledgeBase.defaultSubjects.slice(0, 3).map((subject) => (
+                        knowledgeBase.defaultSubjects
+                          .slice(0, 3)
+                          .map((subject) => (
                             <SubjectChip key={`${subject.type}-${subject.id}`} subject={subject} />
-                          ))}
-                          {knowledgeBase.deniedSubjects.length > 0 ? (
-                            <Badge tone="danger">禁止 {knowledgeBase.deniedSubjects.length}</Badge>
-                          ) : null}
-                        </>
+                          ))
                       )}
                     </div>
                   </Link>

@@ -567,7 +567,7 @@ export function PermissionsPage() {
                     <td className={`${tdClass} text-right`}>
                       {row.document.canManageAcl ? (
                         <Button size="sm" variant="secondary" onClick={() => openAcl(row.document)}>
-                          <Icon name="shield-check" size={13} />
+                          <Icon name="lock" size={13} />
                           设置权限
                         </Button>
                       ) : (
@@ -659,7 +659,7 @@ export function PermissionsPage() {
                 {row.document.canManageAcl ? (
                   <div className="mt-3">
                     <Button size="sm" variant="secondary" onClick={() => openAcl(row.document)}>
-                      <Icon name="shield-check" size={13} />
+                      <Icon name="lock" size={13} />
                       设置权限
                     </Button>
                   </div>

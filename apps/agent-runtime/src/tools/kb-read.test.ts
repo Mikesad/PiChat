@@ -21,6 +21,9 @@ const config: RuntimeConfig = {
     similarityThreshold: 0.2,
     answerSimilarityThreshold: 0.35,
     highSimilarityThreshold: 0.6,
+    rerankRecallThreshold: 0,
+    rerankAnswerSimilarityThreshold: 0.25,
+    rerankHighSimilarityThreshold: 0.6,
     vectorWeight: 0.3,
     maxSnippetChars: 1200,
     maxResultChars: 12_000,
@@ -81,6 +84,43 @@ function createContext(returnedChunks: RetrievalChunk[]) {
   };
 }
 
+function createRerankContext(returnedChunks: RetrievalChunk[]) {
+  const context = createContext(returnedChunks);
+  context.accessClient = {
+    async scope() {
+      return {
+        knowledgeBases: [
+          {
+            id: "kb-1",
+            name: "内部制度",
+            ragflowDatasetId: "ds-1",
+            retrieval: {
+              topK: 6,
+              similarityThreshold: 0.2,
+              vectorWeight: 0.3,
+              rerankModelId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+            },
+            documents: [{ id: "doc-1", title: "内部制度.pdf", ragflowDocumentId: "rf-doc-1" }],
+          },
+        ],
+      };
+    },
+    async check() {
+      return { allowed: true, reason: "allowed" as const };
+    },
+  } as unknown as AccessClient;
+
+  const retrieveCalls: Array<Record<string, unknown>> = [];
+  context.ragflow = {
+    async retrieve(input: Record<string, unknown>) {
+      retrieveCalls.push(input);
+      return returnedChunks;
+    },
+  } as unknown as RAGFlowClient;
+
+  return { context, retrieveCalls };
+}
+
 describe("kb_read tool", () => {
   it("wraps read content in an untrusted context and escapes embedded tags", async () => {
     const context = createContext([
@@ -136,5 +176,63 @@ describe("kb_read tool", () => {
 
     expect((result.details as KbToolDetails).citations).toHaveLength(0);
     expect((result.content[0] as { text: string }).text).toContain("置信度不足");
+  });
+
+  it("uses rerank score for confidence and relaxes the retrieval threshold", async () => {
+    const { context, retrieveCalls } = createRerankContext([
+      {
+        id: "chunk-rerank-high",
+        content: "重排高分片段",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.1,
+        vectorSimilarity: 0.9,
+        termSimilarity: 0,
+        rerankScore: 0.9,
+      },
+    ]);
+    const tool = createKbReadTool(context);
+
+    const result = await tool.execute(
+      "call-rerank-high",
+      { citation: context.citationIndex },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(retrieveCalls[0]).toMatchObject({
+      rerankId: "BAAI/bge-reranker-v2-m3@SILICONFLOW",
+      similarityThreshold: 0,
+    });
+    expect((result.details as KbToolDetails).citations).toHaveLength(1);
+    expect(text).toContain('confidence="high"');
+  });
+
+  it("drops a read chunk with a low rerank score even when hybrid similarity is high", async () => {
+    const { context } = createRerankContext([
+      {
+        id: "chunk-rerank-low",
+        content: "重排低分片段",
+        documentId: "rf-doc-1",
+        documentKeyword: "",
+        similarity: 0.9,
+        vectorSimilarity: 0.1,
+        termSimilarity: 0.1,
+        rerankScore: 0.1,
+      },
+    ]);
+    const tool = createKbReadTool(context);
+
+    const result = await tool.execute(
+      "call-rerank-low",
+      { citation: context.citationIndex },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+
+    expect((result.details as KbToolDetails).citations).toHaveLength(0);
   });
 });

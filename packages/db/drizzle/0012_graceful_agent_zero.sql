@@ -1,0 +1,2 @@
+ALTER TABLE `model_configs` DROP INDEX `model_configs_tenant_user_model_uq`;--> statement-breakpoint
+ALTER TABLE `model_configs` ADD CONSTRAINT `model_configs_tenant_model_uq` UNIQUE(`tenant_id`,`kind`,`provider`,`model_id`);

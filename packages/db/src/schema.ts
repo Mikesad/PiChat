@@ -275,9 +275,9 @@ export const modelConfigs = mysqlTable(
     tenantId: varchar("tenant_id", { length: 36 })
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 36 }).references(() => users.id, {
+      onDelete: "set null",
+    }),
     kind: varchar("kind", { length: 20 }).default("chat").notNull(),
     provider: varchar("provider", { length: 60 }).notNull(),
     modelId: varchar("model_id", { length: 120 }).notNull(),
@@ -290,9 +290,8 @@ export const modelConfigs = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => [
-    uniqueIndex("model_configs_tenant_user_model_uq").on(
+    uniqueIndex("model_configs_tenant_model_uq").on(
       table.tenantId,
-      table.userId,
       table.kind,
       table.provider,
       table.modelId,
@@ -308,9 +307,9 @@ export const searchConfigs = mysqlTable(
     tenantId: varchar("tenant_id", { length: 36 })
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    userId: varchar("user_id", { length: 36 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 36 }).references(() => users.id, {
+      onDelete: "set null",
+    }),
     provider: varchar("provider", { length: 40 }).notNull(),
     name: varchar("name", { length: 120 }).notNull(),
     remark: varchar("remark", { length: 500 }),

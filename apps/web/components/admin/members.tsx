@@ -33,7 +33,6 @@ import {
   LinkButton,
   PageHeader,
   SearchInput,
-  StatStrip,
   TableShell,
   tdClass,
   thClass,
@@ -185,21 +184,6 @@ export function MembersPage() {
         eyebrow="Directory"
         title="部门成员"
         description="查看并编辑成员角色、状态、部门与文档访问范围。成员与部门来自本地数据库。"
-        actions={
-          <Badge tone="neutral">
-            <Icon name="database" size={12} />
-            本地 MySQL
-          </Badge>
-        }
-      />
-
-      <StatStrip
-        items={[
-          { label: "成员总数", value: total, hint: "含停用账号" },
-          { label: "活跃成员", value: activeUsers, hint: "当前页" },
-          { label: "部门", value: groups.length, hint: "本地数据库" },
-          { label: "数据来源", value: "本地 MySQL", hint: "实时查询" },
-        ]}
       />
 
       {directoryStatus === "loading" ? (

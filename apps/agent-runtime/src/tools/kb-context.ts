@@ -20,14 +20,23 @@ const KB_CONTEXT_NOTICE =
 export function classifyKbConfidence(
   similarity: number,
   search: RuntimeConfig["search"],
+  rerankScore?: number,
 ): KbConfidence {
-  if (!Number.isFinite(similarity)) {
+  const hasRerankScore = typeof rerankScore === "number" && Number.isFinite(rerankScore);
+  const score = hasRerankScore ? rerankScore : similarity;
+  if (!Number.isFinite(score)) {
     return "low";
   }
-  if (similarity >= search.highSimilarityThreshold) {
+  const highThreshold = hasRerankScore
+    ? search.rerankHighSimilarityThreshold
+    : search.highSimilarityThreshold;
+  const answerThreshold = hasRerankScore
+    ? search.rerankAnswerSimilarityThreshold
+    : search.answerSimilarityThreshold;
+  if (score >= highThreshold) {
     return "high";
   }
-  if (similarity >= search.answerSimilarityThreshold) {
+  if (score >= answerThreshold) {
     return "medium";
   }
   return "low";

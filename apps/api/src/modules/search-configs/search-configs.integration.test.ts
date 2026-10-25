@@ -11,21 +11,34 @@ const describeWithDatabase = process.env.DATABASE_URL ? describe : describe.skip
 describeWithDatabase("search configs service", () => {
   const crypto = new ModelConfigCrypto(Buffer.alloc(32, 7));
   const tenantId = randomUUID();
-  const userId = randomUUID();
-  const otherUserId = randomUUID();
+  const otherTenantId = randomUUID();
+  const adminId = randomUUID();
+  const memberId = randomUUID();
+  const otherAdminId = randomUUID();
 
-  const user: SessionUser = {
-    id: userId,
+  const admin: SessionUser = {
+    id: adminId,
     tenantId,
-    email: "search@test.local",
-    displayName: "Search User",
+    email: "search-admin@test.local",
+    displayName: "Search Admin",
     role: "tenant_admin",
     departmentId: null,
   };
-  const otherUser: SessionUser = {
-    ...user,
-    id: otherUserId,
+  const member: SessionUser = {
+    id: memberId,
+    tenantId,
+    email: "search-member@test.local",
+    displayName: "Search Member",
+    role: "member",
+    departmentId: null,
+  };
+  const otherAdmin: SessionUser = {
+    id: otherAdminId,
+    tenantId: otherTenantId,
     email: "search-other@test.local",
+    displayName: "Search Other",
+    role: "tenant_admin",
+    departmentId: null,
   };
 
   let db: Database;
@@ -35,22 +48,33 @@ describeWithDatabase("search configs service", () => {
     db = createDatabase(process.env.DATABASE_URL as string);
     service = new SearchConfigsService(db, crypto);
 
-    await db.insert(tenants).values({ id: tenantId, name: "Search Test", slug: tenantId });
+    await db.insert(tenants).values([
+      { id: tenantId, name: "Search Test", slug: tenantId },
+      { id: otherTenantId, name: "Search Other", slug: otherTenantId },
+    ]);
     await db.insert(users).values([
       {
-        id: userId,
+        id: adminId,
         tenantId,
-        email: user.email,
+        email: admin.email,
         passwordHash: "scrypt$00$00",
-        displayName: user.displayName,
+        displayName: admin.displayName,
         role: "tenant_admin",
       },
       {
-        id: otherUserId,
+        id: memberId,
         tenantId,
-        email: otherUser.email,
+        email: member.email,
         passwordHash: "scrypt$00$00",
-        displayName: otherUser.displayName,
+        displayName: member.displayName,
+        role: "member",
+      },
+      {
+        id: otherAdminId,
+        tenantId: otherTenantId,
+        email: otherAdmin.email,
+        passwordHash: "scrypt$00$00",
+        displayName: otherAdmin.displayName,
         role: "tenant_admin",
       },
     ]);
@@ -61,11 +85,12 @@ describeWithDatabase("search configs service", () => {
       return;
     }
     await db.delete(tenants).where(eq(tenants.id, tenantId));
+    await db.delete(tenants).where(eq(tenants.id, otherTenantId));
     await db.$client.end();
   });
 
   it("creates encrypted configs, masks keys and makes the first config default", async () => {
-    const first = await service.create(user, {
+    const first = await service.create(admin, {
       provider: "tavily",
       name: "Tavily",
       remark: "默认",
@@ -76,13 +101,15 @@ describeWithDatabase("search configs service", () => {
     expect(first.isDefault).toBe(true);
     expect(first.hasApiKey).toBe(true);
     expect(first.apiKeyMasked).toBe("****1111");
+    expect(first.createdByUserId).toBe(adminId);
+    expect(first.createdByName).toBe(admin.displayName);
     expect(JSON.stringify(first)).not.toContain("tvly-secret-1111");
 
     const rows = await db.select().from(searchConfigs).where(eq(searchConfigs.tenantId, tenantId));
     expect(rows).toHaveLength(1);
     expect(crypto.decrypt(rows[0]?.encryptedApiKey ?? "")).toBe("tvly-secret-1111");
 
-    const resolved = await service.resolveForRun(user);
+    const resolved = await service.resolveForRun(admin);
     expect(resolved).toMatchObject({
       provider: "tavily",
       apiKey: "tvly-secret-1111",
@@ -90,12 +117,12 @@ describeWithDatabase("search configs service", () => {
     });
   });
 
-  it("keeps the stored key when an update omits apiKey and isolates users", async () => {
-    const list = await service.list(user);
+  it("shares configs with members while keeping writes admin-only", async () => {
+    const list = await service.list(admin);
     const id = list[0]?.id;
     expect(id).toBeTruthy();
 
-    const updated = await service.update(user, id as string, {
+    const updated = await service.update(admin, id as string, {
       provider: "tavily",
       name: "Tavily 生产",
       remark: "",
@@ -104,25 +131,50 @@ describeWithDatabase("search configs service", () => {
     expect(updated.name).toBe("Tavily 生产");
     expect(updated.apiKeyMasked).toBe("****1111");
 
-    await expect(service.list(otherUser)).resolves.toEqual([]);
-    await expect(service.setDefault(otherUser, id as string)).rejects.toMatchObject({
-      code: "not_found",
+    const memberList = await service.list(member);
+    expect(memberList.map((config) => config.id)).toEqual([id]);
+    await expect(service.resolveForRun(member)).resolves.toMatchObject({
+      apiKey: "tvly-secret-1111",
     });
+    await expect(service.setDefault(member, id as string)).rejects.toMatchObject({
+      code: "forbidden",
+    });
+    await expect(service.remove(member, id as string)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      service.create(member, {
+        provider: "tavily",
+        name: "Member Search",
+        apiKey: "tvly-member",
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("isolates search configs between tenants", async () => {
+    await expect(service.list(otherAdmin)).resolves.toEqual([]);
+    const id = (await service.list(admin))[0]?.id as string;
+    await expect(service.setDefault(otherAdmin, id)).rejects.toMatchObject({ code: "not_found" });
+    await expect(service.remove(otherAdmin, id)).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      service.update(otherAdmin, id, {
+        provider: "tavily",
+        name: "Hijack",
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("promotes another config when the default is removed", async () => {
-    const second = await service.create(user, {
+    const second = await service.create(admin, {
       provider: "tavily",
       name: "Tavily 备用",
       apiKey: "tvly-secret-2222",
     });
     expect(second.isDefault).toBe(false);
 
-    const first = (await service.list(user)).find((config) => config.id !== second.id);
+    const first = (await service.list(admin)).find((config) => config.id !== second.id);
     expect(first).toBeTruthy();
-    await service.remove(user, first?.id as string);
+    await service.remove(admin, first?.id as string);
 
-    const remaining = await service.list(user);
+    const remaining = await service.list(member);
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.id).toBe(second.id);
     expect(remaining[0]?.isDefault).toBe(true);

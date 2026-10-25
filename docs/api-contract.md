@@ -10,7 +10,7 @@
 - **ACL 写权限**：`tenant_admin` 与 `knowledge_admin` 可修改文档 ACL 和知识库默认 ACL；`member`、`security_admin` 只读。若用户改为“仅 tenant_admin”，只需调整 `canManageAcl` 和写接口的角色校验。
 - **审计**：A 负责写 `audit_logs`；审计查询 API 和审计页接真属于下一冲刺，B 继续使用现有 mock 审计页。
 - **未接真的 UI**：创建/删除知识库、上传、重试、批量授权本轮不实现后端。B 保留现有入口，点击时提示“本冲刺未接入”，不得写入 mock 数据或伪造审计。
-- **模型配置**：第一冲刺不做服务端接口；任务 C 已实现用户级加密存储 API，浏览器不再保存密钥（见第 12 节）。
+- **模型配置**：任务 C 已实现服务端加密存储 API；2026-10-25 起改为企业（租户）共享、管理员维护，浏览器不再保存密钥（见第 12 节）。
 - **密码**：seed 演示账号统一 `123456`，只用于 demo 租户；数据库只存 scrypt hash。
 
 ## 1. 运行环境
@@ -90,10 +90,11 @@ interface SessionUser {
   displayName: string;
   role: "member" | "knowledge_admin" | "security_admin" | "tenant_admin";
   departmentId: string | null;
+  departmentName?: string | null;
 }
 ```
 
-一个用户最多属于一个部门；`departmentId = null` 表示未分配，部门授权不会匹配该用户。
+一个用户最多属于一个部门；`departmentId = null` 表示未分配，部门授权不会匹配该用户。登录与 `GET /api/auth/me` 会返回 `departmentName`，用于账号菜单展示当前部门。
 
 ## 3. 管理 API
 
@@ -122,7 +123,7 @@ interface SessionUser {
     {
       "id": "kb-policy",
       "name": "内部制度",
-      "description": "公司规章制度、差旅与合规文件。默认全员可读。",
+      "description": "公司规章制度、差旅与合规文件。默认多部门可读。",
       "embeddingModel": "bge-m3 · 1024 维",
       "ownerDepartmentId": "g-platform",
       "ragflowDatasetId": "ragflow_policy_2026",
@@ -370,7 +371,7 @@ interface SessionUser {
 - 每个用户只分配一个部门（`users.department_id`）；`u-gu` 保持 `disabled`。
 - 所有用户密码 `123456`。
 - `g-all` 等组的 `external_id` 可以保留 mock 值，但 UI 文案必须说明来自本地数据库。
-- 知识库默认 ACL 写入 `knowledge_base_acls`；文档例外写入 `document_acls`；`acl_version = 1`。
+- 知识库默认 ACL 写入 `knowledge_base_acls`；文档级权限写入 `document_acls`；`acl_version = 1`。
 - `docs[].aclMode` 默认 `inherit`；安全制度、投诉 SOP、定价策略使用 `restricted` 并显式列出 read 主体。
 - `knowledge_bases.owner_id` 记录创建者；缺少创建者时迁移回填该租户最早的 `tenant_admin`。
 - 必须可重复执行：按固定 ID upsert；不要删除非 demo 租户的数据。
@@ -433,7 +434,7 @@ interface SessionUser {
 2. 张明、王芳分别登录；`GET /api/auth/me` 返回正确角色和组。
 3. `GET /api/knowledge-bases` 与文档列表在两位账号下结果不同。
 4. 王芳无法读取被 deny 的文档；deny 优先于默认和 read 例外。
-5. 修改文档例外后有效访问立即变化；`acl_version` 递增；`audit_logs` 有记录。
+5. 修改文档级权限后有效访问立即变化；`acl_version` 递增；`audit_logs` 有记录。
 6. 未登录访问业务 API 返回 401；跨租户查询返回 404/403。
 7. 数据库无明文密码；日志无密码/token；Cookie 为 HttpOnly。
 8. `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build` 通过。
@@ -449,21 +450,21 @@ interface SessionUser {
 
 ## 12. 任务 C 新增接口（2026-10-21）
 
-### 12.1 用户级模型配置
+### 12.1 企业共享模型配置（2026-10-21，2026-10-25 共享化）
 
-所有接口要求登录；`tenantId`、`userId` 只来自 session。响应不包含 `encryptedApiKey` 或明文 API Key。
+所有接口要求登录；`tenantId` 只来自 session。列表与运行解析按租户共享，任何成员可用；新增/编辑/删除/设默认仅 `tenant_admin`。`userId` 仅记录创建人。响应不包含 `encryptedApiKey` 或明文 API Key。
 
 - `GET /api/model-configs?kind=chat|embedding|rerank|vision|speech` → `{ modelConfigs: ModelConfigSummary[] }`
-- `POST /api/model-configs` → `201 { modelConfig }`
+- `POST /api/model-configs` → `201 { modelConfig }`（`tenant_admin`）
   - body：`{ kind, provider, modelId, displayName, baseUrl, apiKey, makeDefault? }`
   - `kind` 为 `chat`、`embedding`、`rerank`、`vision`、`speech`；当前可配置 `chat`、`embedding`、`rerank`。
   - `chat` 支持 `opencode-go`、`deepseek`；`embedding` / `rerank` 支持 `siliconflow`。
-  - 同一 `(tenant, user, kind, provider, modelId)` 重复返回 `409 conflict`。
-- `PUT /api/model-configs/:id` → `200 { modelConfig }`
+  - 同一 `(tenant, kind, provider, modelId)` 重复返回 `409 conflict`。
+- `PUT /api/model-configs/:id` → `200 { modelConfig }`（`tenant_admin`）
   - body 同上；`apiKey` 省略或空字符串时保留旧 Key。
-- `DELETE /api/model-configs/:id` → `204`
-- `POST /api/model-configs/:id/default` → `200 { modelConfig }`
-  - 事务内只清除当前用户、同一 `kind` 的其他默认配置。
+- `DELETE /api/model-configs/:id` → `204`（`tenant_admin`）
+- `POST /api/model-configs/:id/default` → `200 { modelConfig }`（`tenant_admin`）
+  - 事务内只清除当前租户、同一 `kind` 的其他默认配置。
 
 `ModelConfigSummary`：
 
@@ -478,29 +479,31 @@ interface SessionUser {
   isDefault: boolean;
   hasApiKey: boolean;
   apiKeyMasked: string; // 如 ****abcd；无 Key 时为空字符串
+  createdByUserId: string | null;
+  createdByName: string | null;
   createdAt: string;
   updatedAt: string;
 }
 ```
 
-API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；密钥只从 `MODEL_CONFIG_ENCRYPTION_KEY` 读取。
+API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；密钥只从 `MODEL_CONFIG_ENCRYPTION_KEY` 读取。Composer 选择模型时通过聊天请求的 `modelConfigId` 生效，不修改企业默认模型。
 
-### 12.2 用户级搜索引擎配置（2026-10-24）
+### 12.2 企业共享搜索引擎配置（2026-10-24，2026-10-25 共享化）
 
-所有接口要求登录；`tenantId`、`userId` 只来自 session。当前 `provider` 只支持 `tavily`。
+所有接口要求登录；`tenantId` 只来自 session。列表与运行解析按租户共享，维护与测试连接仅 `tenant_admin`。当前 `provider` 只支持 `tavily`。
 
 - `GET /api/search-configs` → `{ searchConfigs: SearchConfigSummary[] }`
-- `POST /api/search-configs` → `201 { searchConfig }`
-  - body：`{ provider, name, remark?, apiKey, proxy?, makeDefault? }`；首个配置自动设为默认。
-- `PUT /api/search-configs/:id` → `200 { searchConfig }`
+- `POST /api/search-configs` → `201 { searchConfig }`（`tenant_admin`）
+  - body：`{ provider, name, remark?, apiKey, proxy?, makeDefault? }`；租户首个配置自动设为默认。
+- `PUT /api/search-configs/:id` → `200 { searchConfig }`（`tenant_admin`）
   - `apiKey` 省略或空字符串时保留旧 Key。
-- `DELETE /api/search-configs/:id` → `204`
+- `DELETE /api/search-configs/:id` → `204`（`tenant_admin`）
   - 删除默认配置时，自动把最近更新的其他配置设为默认。
-- `POST /api/search-configs/:id/default` → `200 { searchConfig }`
-- `POST /api/search-configs/test` → `200 { ok, message, latencyMs }`
+- `POST /api/search-configs/:id/default` → `200 { searchConfig }`（`tenant_admin`）
+- `POST /api/search-configs/test` → `200 { ok, message, latencyMs }`（`tenant_admin`）
   - body：`{ provider, id?, apiKey?, proxy? }`；`id` 存在且 `apiKey` 为空时使用服务端已保存密钥。
 
-`SearchConfigSummary` 返回 `id`、`provider`、`name`、`remark`、`proxy`、`isDefault`、`hasApiKey`、`apiKeyMasked` 与时间字段，不返回明文 Key。聊天开启联网搜索时，业务 API 解析当前用户默认配置，仅通过内网把 `provider`、`apiKey`、`proxy` 传给 Runtime。
+`SearchConfigSummary` 返回 `id`、`provider`、`name`、`remark`、`proxy`、`isDefault`、`hasApiKey`、`apiKeyMasked`、`createdByUserId`、`createdByName` 与时间字段，不返回明文 Key。聊天开启联网搜索时，业务 API 解析同租户默认配置，仅通过内网把 `provider`、`apiKey`、`proxy` 传给 Runtime。
 
 ### 12.3 文档上传与重新解析
 
@@ -682,7 +685,7 @@ API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；
 
 - `documentIds`：1–200，去重；必须全部属于该知识库、当前租户且未删除，否则 `400 invalid_request`。
 - `exceptions`：最多 200；重复 subject 返回 `400`；`type/id` 必须属于当前租户，否则 `400`。
-- 本轮只支持 `mode = "replace"`（可省略）。语义是**整体替换**这些文档的文档例外，不是追加；每篇文档写入相同的 exceptions。
+- 本轮只支持 `mode = "replace"`（可省略）。语义是**整体替换**这些文档的文档级权限，不是追加；每篇文档写入相同的 exceptions。
 - 事务内删除这些文档的旧 `document_acls`、插入新例外、知识库 `acl_version` 只递增一次；随后清 ACL 缓存。
 - 审计：`action = document.acl.batch_update`，`resourceType = knowledge_base`，`resourceId = knowledgeBaseId`，metadata 记录 `documentIds`、变更前后摘要、`aclVersion`。
 - 成功 `200 { aclVersion, documents: DocumentSummary[] }`，`documents` 按请求中的 `documentIds` 顺序返回。
@@ -752,7 +755,7 @@ API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；
       "updatedAt": "..."
     }
   ],
-  "groups": [{ "id": "g-all", "name": "全员", "externalId": "idp-all-staff", "memberCount": 14 }],
+  "groups": [{ "id": "g-all", "name": "综合部", "externalId": "idp-all-staff", "memberCount": 14 }],
   "pagination": {
     "page": 1,
     "pageSize": 10,
@@ -782,7 +785,7 @@ API Key 使用 AES-256-GCM 加密，存储格式 `v1:<iv>:<tag>:<ciphertext>`；
       "departmentId": "g-platform"
     }
   ],
-  "groups": [{ "id": "g-all", "name": "全员", "memberCount": 4 }]
+  "groups": [{ "id": "g-all", "name": "综合部", "memberCount": 4 }]
 }
 ```
 

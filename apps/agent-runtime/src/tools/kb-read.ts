@@ -78,6 +78,12 @@ export function createKbReadTool(context: ToolRuntimeContext) {
 
       const query =
         params.query?.trim() || ref.citation.snippet.slice(0, 120) || ref.citation.documentTitle;
+      const rerankId = knowledgeBase.retrieval?.rerankModelId;
+      const knowledgeBaseThreshold =
+        knowledgeBase.retrieval?.similarityThreshold ?? context.config.search.similarityThreshold;
+      const similarityThreshold = rerankId
+        ? Math.min(knowledgeBaseThreshold, context.config.search.rerankRecallThreshold)
+        : knowledgeBaseThreshold;
 
       let chunks: RetrievalChunk[];
       try {
@@ -86,14 +92,10 @@ export function createKbReadTool(context: ToolRuntimeContext) {
           datasetIds: [knowledgeBase.ragflowDatasetId],
           documentIds: [document.ragflowDocumentId],
           topK: 4,
-          similarityThreshold:
-            knowledgeBase.retrieval?.similarityThreshold ??
-            context.config.search.similarityThreshold,
+          similarityThreshold,
           vectorSimilarityWeight:
             knowledgeBase.retrieval?.vectorWeight ?? context.config.search.vectorWeight,
-          ...(knowledgeBase.retrieval?.rerankModelId
-            ? { rerankId: knowledgeBase.retrieval.rerankModelId }
-            : {}),
+          ...(rerankId ? { rerankId } : {}),
         });
       } catch (error) {
         if (error instanceof RAGFlowError) {
@@ -114,7 +116,11 @@ export function createKbReadTool(context: ToolRuntimeContext) {
       }
 
       const confident = filtered.flatMap((chunk) => {
-        const confidence = classifyKbConfidence(chunk.similarity, context.config.search);
+        const confidence = classifyKbConfidence(
+          chunk.similarity,
+          context.config.search,
+          chunk.rerankScore,
+        );
         return confidence === "low" ? [] : [{ chunk, confidence }];
       });
 

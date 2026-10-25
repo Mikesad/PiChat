@@ -155,8 +155,8 @@ export function CreateKnowledgeDrawer({
           label="Embedding 模型"
           hint={
             embeddingConfigs.length > 0
-              ? "选项来自管理端「模型配置」中保存的 Embedding 配置。每个知识库固定一个模型和维度，创建后不可更改。"
-              : "还没有 Embedding 配置，将使用服务端默认模型。可先在管理端「模型配置」中添加 SiliconFlow Embedding。"
+              ? "选项来自企业共享的 Embedding 配置。每个知识库固定一个模型和维度，创建后不可更改。"
+              : "还没有 Embedding 配置，将使用服务端默认模型。请联系企业管理员在「模型配置」中添加 SiliconFlow Embedding。"
           }
         >
           <select
@@ -187,7 +187,7 @@ export function CreateKnowledgeDrawer({
             <span className="text-[11px] text-subtle">{defaultSubjects.length} 个主体</span>
           </div>
           <p className="mt-1 text-[11px] leading-5 text-subtle">
-            默认范围对该知识库的全部文档生效；文档可以再添加读取或拒绝例外。
+            默认范围对该知识库的全部文档生效；文档可以再添加读取或拒绝的文档级权限。
           </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <SubjectSelect
@@ -236,7 +236,7 @@ export function CreateKnowledgeDrawer({
             </ul>
           ) : (
             <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-[11px] leading-5 text-subtle">
-              尚未设置默认范围：创建后只有租户管理员可读，普通成员需要通过文档例外授权。
+              尚未设置默认范围：创建后只有租户管理员可读，普通成员需要通过文档级权限授权。
             </p>
           )}
         </section>

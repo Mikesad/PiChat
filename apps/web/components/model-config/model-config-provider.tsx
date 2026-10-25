@@ -43,13 +43,13 @@ interface ModelConfigContextValue {
   chatConfigs: ModelConfigSummary[];
   embeddingConfigs: ModelConfigSummary[];
   rerankConfigs: ModelConfigSummary[];
-  defaultConfigId: string | null;
   activeConfig: ModelConfigSummary | null;
   ready: boolean;
   error: string | null;
   isOpen: boolean;
   openConfig: () => void;
   closeConfig: () => void;
+  selectConfig: (id: string) => void;
   reload: () => Promise<void>;
   saveConfig: (input: SaveModelConfigInput) => Promise<ModelConfigSummary>;
   removeConfig: (id: string) => Promise<void>;
@@ -64,6 +64,7 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
   const reload = useCallback(async () => {
@@ -144,6 +145,7 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const removeConfig = useCallback(async (id: string) => {
     await deleteModelConfig(id);
     setConfigs((previous) => previous.filter((config) => config.id !== id));
+    setSelectedConfigId((previous) => (previous === id ? null : previous));
   }, []);
 
   const setDefaultConfig = useCallback(async (id: string) => {
@@ -165,6 +167,7 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
 
   const openConfig = useCallback(() => setIsOpen(true), []);
   const closeConfig = useCallback(() => setIsOpen(false), []);
+  const selectConfig = useCallback((id: string) => setSelectedConfigId(id), []);
 
   const chatConfigs = useMemo(() => configs.filter((config) => config.kind === "chat"), [configs]);
   const embeddingConfigs = useMemo(
@@ -175,14 +178,12 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     () => configs.filter((config) => config.kind === "rerank"),
     [configs],
   );
-  const defaultConfigId = useMemo(
-    () => chatConfigs.find((config) => config.isDefault)?.id ?? null,
-    [chatConfigs],
-  );
-  const activeConfig = useMemo(
-    () => chatConfigs.find((config) => config.isDefault) ?? chatConfigs[0] ?? null,
-    [chatConfigs],
-  );
+  const activeConfig = useMemo(() => {
+    const selected = selectedConfigId
+      ? chatConfigs.find((config) => config.id === selectedConfigId)
+      : undefined;
+    return selected ?? chatConfigs.find((config) => config.isDefault) ?? chatConfigs[0] ?? null;
+  }, [chatConfigs, selectedConfigId]);
 
   return (
     <ModelConfigContext.Provider
@@ -191,13 +192,13 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
         chatConfigs,
         embeddingConfigs,
         rerankConfigs,
-        defaultConfigId,
         activeConfig,
         ready,
         error,
         isOpen,
         openConfig,
         closeConfig,
+        selectConfig,
         reload,
         saveConfig,
         removeConfig,

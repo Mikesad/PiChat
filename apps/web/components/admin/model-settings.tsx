@@ -2,6 +2,7 @@
 
 import type { ModelConfigSummary, ModelKind, ModelProviderId } from "@pichat/shared";
 import { type FormEvent, useMemo, useRef, useState } from "react";
+import { canManageSharedConfigs } from "@/lib/admin-data";
 import { apiErrorMessage } from "@/lib/api-client";
 import {
   defaultDisplayName,
@@ -11,6 +12,7 @@ import {
   providerOptionsForKind,
 } from "@/lib/model-config";
 import { cn } from "@/lib/utils";
+import { useAuth } from "../auth/auth-provider";
 import { Icon, type IconName } from "../icons";
 import { useModelConfig } from "../model-config/model-config-provider";
 import { ConfirmDialog } from "./confirm-dialog";
@@ -79,7 +81,9 @@ export function ModelSettings() {
     setDefaultConfig,
     error: loadError,
   } = useModelConfig();
+  const { user } = useAuth();
   const { showToast } = useToast();
+  const canManage = canManageSharedConfigs(user?.role);
   const [tab, setTab] = useState<KindFilter>("all");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ModelConfigSummary | null>(null);
@@ -110,10 +114,10 @@ export function ModelSettings() {
 
   const activeKind: ModelKind = tab === "all" ? "chat" : tab;
   const activeConfigurable = kindMeta[activeKind].configurable;
-  const drawerOpen = editing !== null || creatingKind !== null;
+  const drawerOpen = canManage && (editing !== null || creatingKind !== null);
 
   function openCreate() {
-    if (!activeConfigurable) {
+    if (!canManage || !activeConfigurable) {
       return;
     }
     setActionError(null);
@@ -122,7 +126,7 @@ export function ModelSettings() {
   }
 
   function openEdit(config: ModelConfigSummary) {
-    if (!kindMeta[config.kind].configurable) {
+    if (!canManage || !kindMeta[config.kind].configurable) {
       return;
     }
     setActionError(null);
@@ -161,14 +165,22 @@ export function ModelSettings() {
       <PageHeader
         eyebrow="模型与能力"
         title="模型配置"
-        description="按账号管理对话、Embedding 与 ReRank 模型。视觉和语音模型仅展示分类，本版本不接入。API Key 由服务端加密保存。"
+        description="企业内共用对话、Embedding 与 ReRank 模型：管理员配置一次，所有成员在对话和知识库中直接使用。视觉和语音模型仅展示分类，本版本不接入。API Key 由服务端加密保存。"
         actions={
-          <Button onClick={openCreate} disabled={!activeConfigurable}>
-            <Icon name="plus" size={15} />
-            添加模型
-          </Button>
+          canManage ? (
+            <Button onClick={openCreate} disabled={!activeConfigurable}>
+              <Icon name="plus" size={15} />
+              添加模型
+            </Button>
+          ) : null
         }
       />
+
+      {!canManage ? (
+        <InfoBanner tone="neutral" icon="lock" title="只读模式">
+          共享模型由企业管理员统一维护。你可以在对话中选择并使用已启用的模型。
+        </InfoBanner>
+      ) : null}
 
       {loadError ? (
         <InfoBanner tone="danger" icon="alert-circle" title="模型配置加载失败">
@@ -241,7 +253,7 @@ export function ModelSettings() {
                 : kindMeta[activeKind].description
             }
             action={
-              activeConfigurable ? (
+              canManage && activeConfigurable ? (
                 <Button onClick={openCreate} variant="secondary">
                   <Icon name="plus" size={14} />
                   添加模型
@@ -257,12 +269,13 @@ export function ModelSettings() {
               key={config.id}
               config={config}
               showKind={tab === "all"}
+              canManage={canManage}
               onEdit={() => openEdit(config)}
               onSetDefault={() => void handleSetDefault(config)}
               onRemove={() => setRemoving(config)}
             />
           ))}
-          {activeConfigurable && !normalizedQuery ? (
+          {canManage && activeConfigurable && !normalizedQuery ? (
             <button
               type="button"
               onClick={openCreate}
@@ -318,12 +331,14 @@ export function ModelSettings() {
 function ModelCard({
   config,
   showKind,
+  canManage,
   onEdit,
   onSetDefault,
   onRemove,
 }: {
   config: ModelConfigSummary;
   showKind: boolean;
+  canManage: boolean;
   onEdit: () => void;
   onSetDefault: () => void;
   onRemove: () => void;
@@ -356,26 +371,31 @@ function ModelCard({
               {config.apiKeyMasked || "未保存密钥"}
             </span>
           </div>
+          <p className="mt-1 truncate text-[10px] text-subtle">
+            {config.createdByName ? `由 ${config.createdByName} 配置` : "创建人已删除"}
+          </p>
         </div>
       </div>
 
-      <div className="mt-auto flex flex-wrap items-center gap-1 pt-3">
-        {!config.isDefault ? (
-          <Button size="sm" variant="ghost" onClick={onSetDefault}>
-            设为默认
+      {canManage ? (
+        <div className="mt-auto flex flex-wrap items-center gap-1 pt-3">
+          {!config.isDefault ? (
+            <Button size="sm" variant="ghost" onClick={onSetDefault}>
+              设为默认
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={onEdit}>
+            编辑
           </Button>
-        ) : null}
-        <Button size="sm" variant="ghost" onClick={onEdit}>
-          编辑
-        </Button>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="inline-flex h-9 cursor-pointer items-center rounded-lg px-2.5 text-xs font-medium text-danger transition-colors duration-150 hover:bg-danger-soft"
-        >
-          移除
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="inline-flex h-9 cursor-pointer items-center rounded-lg px-2.5 text-xs font-medium text-danger transition-colors duration-150 hover:bg-danger-soft"
+          >
+            移除
+          </button>
+        </div>
+      ) : null}
     </article>
   );
 }

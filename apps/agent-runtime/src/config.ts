@@ -17,6 +17,9 @@ export interface RuntimeConfig {
     similarityThreshold: number;
     answerSimilarityThreshold: number;
     highSimilarityThreshold: number;
+    rerankRecallThreshold: number;
+    rerankAnswerSimilarityThreshold: number;
+    rerankHighSimilarityThreshold: number;
     vectorWeight: number;
     maxSnippetChars: number;
     maxResultChars: number;
@@ -38,6 +41,14 @@ function numberFromEnv(value: string | undefined, fallback: number): number {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function ratioFromEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
 
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
@@ -72,6 +83,15 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       similarityThreshold: Number(env.KB_SEARCH_SIMILARITY_THRESHOLD ?? "0.2"),
       answerSimilarityThreshold: Number(env.KB_SEARCH_ANSWER_SIMILARITY_THRESHOLD ?? "0.35"),
       highSimilarityThreshold: Number(env.KB_SEARCH_HIGH_SIMILARITY_THRESHOLD ?? "0.6"),
+      rerankRecallThreshold: ratioFromEnv(env.KB_SEARCH_RERANK_RECALL_THRESHOLD, 0),
+      rerankAnswerSimilarityThreshold: ratioFromEnv(
+        env.KB_SEARCH_RERANK_ANSWER_SIMILARITY_THRESHOLD,
+        0.25,
+      ),
+      rerankHighSimilarityThreshold: ratioFromEnv(
+        env.KB_SEARCH_RERANK_HIGH_SIMILARITY_THRESHOLD,
+        0.6,
+      ),
       vectorWeight: Number(env.KB_SEARCH_VECTOR_WEIGHT ?? "0.3"),
       maxSnippetChars: numberFromEnv(env.KB_SEARCH_MAX_SNIPPET_CHARS, 1_200),
       maxResultChars: numberFromEnv(env.KB_SEARCH_MAX_RESULT_CHARS, 12_000),
