@@ -185,15 +185,10 @@ flowchart LR
 
 > 以下为截图占位，后续替换为 `docs/images/*.png` 即可。
 
-| 对话工作台 | 知识库与文档 |
-| :---: | :---: |
-| <img src="https://placehold.co/800x450/0b1020/94a3b8?text=Chat+Workspace" alt="对话工作台占位图" width="100%" /> | <img src="https://placehold.co/800x450/0b1020/94a3b8?text=Knowledge+Base" alt="知识库详情占位图" width="100%" /> |
-| 流式回答、思考过程、工具调用、引用溯源 | 文档状态、在线预览、批量授权 |
+<img width="1912" height="914" alt="%1Z2U%3B S E )J9 BWE(7Y" src="https://github.com/user-attachments/assets/ac3252db-bffc-4aa0-bd2e-774e641018b1" />
+<img width="1912" height="914" alt="7 `U5HGXT)44Y4M~NNUM5OW" src="https://github.com/user-attachments/assets/b5baa885-1854-4ca2-ab5a-5680e04566c9" />
+<img width="1912" height="914" alt="88WK8LQ5MC$@LDGBX8 M05Y" src="https://github.com/user-attachments/assets/8ef3ef56-bf3a-4ae8-94f0-b914e0ebf292" />
 
-| 权限配置 | 管理控制台 |
-| :---: | :---: |
-| <img src="https://placehold.co/800x450/0b1020/94a3b8?text=ACL+%26+Permissions" alt="权限配置占位图" width="100%" /> | <img src="https://placehold.co/800x450/0b1020/94a3b8?text=Admin+Console" alt="管理控制台占位图" width="100%" /> |
-| 用户/部门允许与禁止、文档权限模式 | 模型、搜索引擎、审计与成员管理 |
 
 ---
 
