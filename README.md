@@ -183,7 +183,7 @@ flowchart LR
 
 ## UI 预览
 
-> 以下为截图占位，后续替换为 `docs/images/*.png` 即可。
+
 
 <img width="1912" height="914" alt="%1Z2U%3B S E )J9 BWE(7Y" src="https://github.com/user-attachments/assets/ac3252db-bffc-4aa0-bd2e-774e641018b1" />
 <img width="1912" height="914" alt="7 `U5HGXT)44Y4M~NNUM5OW" src="https://github.com/user-attachments/assets/b5baa885-1854-4ca2-ab5a-5680e04566c9" />
